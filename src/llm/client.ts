@@ -43,7 +43,7 @@ export async function structured<T extends z.ZodType>(
       max_completion_tokens: opts.maxTokens ?? 2000,
       response_format: { type: "json_schema", json_schema: { name, schema: jsonSchemaOf(schema), strict: true } },
     },
-    { timeout: opts.timeoutMs ?? 20_000, maxRetries: opts.timeoutMs && opts.timeoutMs < 5000 ? 0 : 1 },
+    { timeout: opts.timeoutMs ?? 20_000, maxRetries: opts.timeoutMs && opts.timeoutMs <= 5000 ? 0 : 1 },
   );
   const text = res.choices[0]?.message?.content ?? "";
   const json = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, ""));

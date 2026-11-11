@@ -40,7 +40,7 @@ export function config(): Config {
       maxToolRounds: 4,
       resultsPerQuery: 5,
       searchTimeoutMs: 8000,
-      plannerTimeoutMs: 2500,
+      plannerTimeoutMs: 5000,
       historyTurns: 10,
     },
   };

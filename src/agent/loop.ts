@@ -42,8 +42,11 @@ export async function runLoop(opts: {
 
   for (; ; round++) {
     const toolsAllowed = opts.allowTools !== false && round < maxToolRounds;
-    if (opts.allowTools !== false && round === maxToolRounds) {
-      const nudge: ChatCompletionMessageParam = { role: "system", content: ANSWER_NOW };
+    const finalRound = opts.allowTools !== false && round === maxToolRounds;
+    if (finalRound) {
+      // Budget spent: ask for the answer and offer no tools. (A user-role note works more reliably on
+      // Gemini than tool_choice "none", which sometimes returns an empty message.)
+      const nudge: ChatCompletionMessageParam = { role: "user", content: `[system note] ${ANSWER_NOW}` };
       convo.push(nudge);
       produced.push(nudge);
     }
@@ -55,7 +58,7 @@ export async function runLoop(opts: {
         stream: true,
         reasoning_effort: opts.effort,
         max_completion_tokens: 8000,
-        ...(opts.allowTools !== false ? { tools: [webSearchTool], tool_choice: toolsAllowed ? "auto" : "none" } : {}),
+        ...(toolsAllowed ? { tools: [webSearchTool], tool_choice: "auto" as const } : {}),
       },
       { signal: opts.signal },
     );

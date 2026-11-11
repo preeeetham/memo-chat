@@ -87,7 +87,10 @@ export async function runTurn(input: TurnInput, emit: (e: ChatEvent) => void, si
   mark("total");
 
   let answer = result.text.trim();
-  if (!answer) answer = "Sorry, I couldn't produce an answer for that. Could you rephrase or try again?";
+  if (!answer) {
+    answer = "Sorry, I couldn't produce an answer for that. Could you rephrase or try again?";
+    emit({ type: "text", delta: answer });
+  }
   if (result.finishReason === "length") answer += "\n\n_(Answer cut short: it hit the length limit.)_";
   if (result.finishReason === "content_filter") answer = "I can't help with that one.";
 
