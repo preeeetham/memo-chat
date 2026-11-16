@@ -11,7 +11,8 @@ import { describeNow, localDate, safeTz, shortLabel } from "../time/local";
 import { resolveAll } from "../time/resolve";
 import { renderContext } from "./bundle";
 import { runLoop } from "./loop";
-import { plan as makePlan, type Plan } from "./planner";
+import { embed } from "../llm/embed";
+import { isFastPath, plan as makePlan, type Plan } from "./planner";
 import { SYSTEM_PROMPT } from "./prompt";
 import { recall } from "./recall";
 
@@ -49,12 +50,15 @@ export async function runTurn(input: TurnInput, emit: (e: ChatEvent) => void, si
   const nowLine = describeNow(at, tz);
   const recent = prior.slice(-6).map((m) => `${m.role}: ${m.text.slice(0, 300)}`);
   const history = replayHistory(prior);
+  // The query embedding (if enabled) is computed alongside the planner, so hybrid recall costs no extra wait.
+  const queryEmbedding = isFastPath(text) ? undefined : embed(text);
+  queryEmbedding?.catch(() => {});
   const p: Plan = await makePlan(text, recent, nowLine);
   mark("plan");
 
   // 3. Dates, in code.  4. Recall, in SQL.
   const resolutions = resolveAll(p.time_expressions, at, tz);
-  const bundle = await recall(p, resolutions, conv.id);
+  const bundle = await recall(p, resolutions, conv.id, queryEmbedding);
   mark("recall");
   emit({
     type: "memory",

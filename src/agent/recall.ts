@@ -48,7 +48,11 @@ const BUNDLE_CHARS = 14_000; // ~3.5k tokens
 
 const PRICE_ATTR = /price|pricing|cost|plan|tier|seat|fee|limit|quota/i;
 
-export async function recall(p: Plan, resolutions: Resolution[], conversationId: string): Promise<EvidenceBundle> {
+/**
+ * queryEmbedding: the caller may start embedding the user's message while the planner runs, so the
+ * vector side of hybrid recall adds no latency. Without it, the planner's keywords are embedded here.
+ */
+export async function recall(p: Plan, resolutions: Resolution[], conversationId: string, queryEmbedding?: Promise<number[] | null>): Promise<EvidenceBundle> {
   const resolved = resolutions.map((r) => ({ expr: r.expr, date: rangeLabel(r.candidates[0]!) }));
   if (!p.needs_memory) return { status: "not_needed", resolved, turns: [] };
 
@@ -58,7 +62,7 @@ export async function recall(p: Plan, resolutions: Resolution[], conversationId:
   const span = await historySpan();
   // Hybrid recall: full text always; vector similarity too when embeddings are configured.
   const qvec = keywords.length
-    ? await embed(keywords.join(", ")).catch((err) => {
+    ? await (queryEmbedding ?? embed(keywords.join(", "))).catch((err) => {
         console.warn(`[recall] query embedding failed, full-text only: ${(err as Error).message.slice(0, 120)}`);
         return null;
       })
