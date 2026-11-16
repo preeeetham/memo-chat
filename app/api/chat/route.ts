@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { runTurn } from "../../../src/agent/turn";
+import { withUser } from "../../../src/auth";
+import { admitTurn } from "../../../src/budget";
 import { missingConfig } from "../../../src/config";
 import { encodeEvent, type ChatEvent } from "../../../src/sse";
+import { TurnBuffer } from "../../../src/stream";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,40 +15,53 @@ const Body = z.object({
   tz: z.string().optional(),
 });
 
-/** POST a user message; the reply streams back as server-sent events. */
+/**
+ * POST a user message; the reply streams back as server-sent events with ids. Every event is also
+ * buffered in Redis, so a dropped connection resumes via GET /api/chat/<turn id>/events.
+ * The turn runs to completion even if the client disconnects; POST /api/chat/<turn id>/stop stops it.
+ */
 export async function POST(req: Request): Promise<Response> {
-  const parsed = Body.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return Response.json({ error: "Expected {conversationId?, text, tz?}" }, { status: 400 });
-  const problems = missingConfig();
-  if (problems.length) return Response.json({ error: problems.join(" ") }, { status: 503 });
+  return withUser(req, async (user) => {
+    const parsed = Body.safeParse(await req.json().catch(() => null));
+    if (!parsed.success) return Response.json({ error: "Expected {conversationId?, text, tz?}" }, { status: 400 });
+    const problems = missingConfig();
+    if (problems.length) return Response.json({ error: problems.join(" ") }, { status: 503 });
+    const admission = await admitTurn(user.id);
+    if (!admission.ok) return Response.json({ error: admission.message }, { status: admission.status, headers: { "retry-after": String(admission.retryAfterSec) } });
 
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      let open = true;
-      const emit = (e: ChatEvent) => {
-        if (!open) return;
+    const encoder = new TextEncoder();
+    const abort = new AbortController();
+    const buffer = new TurnBuffer(user.id, abort);
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        let open = true;
+        req.signal.addEventListener("abort", () => (open = false));
+        const emit = (e: ChatEvent) => {
+          const seq = buffer.push(e);
+          if (!open) return;
+          try {
+            controller.enqueue(encoder.encode(encodeEvent(e, seq)));
+          } catch {
+            open = false;
+          }
+        };
         try {
-          controller.enqueue(encoder.encode(encodeEvent(e)));
-        } catch {
+          await runTurn(parsed.data, emit, abort.signal);
+        } catch (err) {
+          console.error("[chat] turn failed", err);
+          emit({ type: "error", message: friendlyError(err) });
+        } finally {
+          buffer.close();
           open = false;
+          try {
+            controller.close();
+          } catch {}
         }
-      };
-      try {
-        await runTurn(parsed.data, emit, req.signal);
-      } catch (err) {
-        console.error("[chat] turn failed", err);
-        emit({ type: "error", message: friendlyError(err) });
-      } finally {
-        open = false;
-        try {
-          controller.close();
-        } catch {}
-      }
-    },
-  });
-  return new Response(stream, {
-    headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-transform", connection: "keep-alive" },
+      },
+    });
+    return new Response(stream, {
+      headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache, no-transform", connection: "keep-alive" },
+    });
   });
 }
 

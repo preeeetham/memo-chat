@@ -2,7 +2,7 @@
   "name": "mini-chat",
   "version": "0.1.0",
   "private": true,
-  "description": "A chat agent that remembers past conversations and checks the live web, with one tool: web_search.",
+  "description": "A multi-user chat agent that remembers past conversations and checks the live web, with one tool: web_search.",
   "engines": {
     "node": ">=22"
   },
@@ -11,19 +11,25 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "vitest run",
-    "typecheck": "tsc --noEmit",
+    "worker": "tsx src/worker/main.ts",
+    "migrate": "tsx scripts/migrate.ts",
     "seed": "tsx scripts/seed.ts",
-    "eval": "tsx scripts/eval.ts"
+    "eval": "tsx scripts/eval.ts",
+    "test": "vitest run",
+    "test:integration": "vitest run tests/integration",
+    "smoke": "tsx scripts/smoke.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@date-fns/tz": "^1.5.0",
-    "better-sqlite3": "^13.1.1",
     "chrono-node": "^2.10.3",
     "date-fns": "^4.4.0",
     "dotenv": "^18.0.10",
+    "ioredis": "^6.0.0",
+    "jose": "^6.2.17",
     "next": "^16.4.6",
     "openai": "^7.55.0",
+    "pg": "^8.23.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-markdown": "^10.1.0",
@@ -31,8 +37,8 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^22.20.5",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "tsx": "^4.23.15",

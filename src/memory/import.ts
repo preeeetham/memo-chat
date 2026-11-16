@@ -2,6 +2,7 @@
 import { z } from "zod";
 import { createConversation, insertEvidence, insertMessage, insertSearchCall } from "../db/repo";
 import { localDate, safeTz } from "../time/local";
+import { publishJob } from "./jobs";
 
 export const ImportPayload = z.object({
   tz: z.string().optional(),
@@ -23,26 +24,27 @@ export const ImportPayload = z.object({
 });
 export type ImportPayload = z.infer<typeof ImportPayload>;
 
-export function importConversations(payload: ImportPayload): { conversations: number; messages: number } {
+/** Imports into the current user's history (row-level security sets the owner). */
+export async function importConversations(payload: ImportPayload): Promise<{ conversations: number; messages: number }> {
   const tz = safeTz(payload.tz);
   let messages = 0;
   for (const c of payload.conversations) {
     const first = c.messages[0]?.created_at ?? new Date().toISOString();
-    const conv = createConversation(c.title, new Date(first).toISOString());
+    const conv = await createConversation(c.title, new Date(first).toISOString());
     let lastUserId: string | null = null;
     for (const m of c.messages) {
       const at = new Date(m.created_at);
       if (Number.isNaN(at.getTime())) throw new Error(`bad created_at: ${m.created_at}`);
       const base = { conversation_id: conv.id, text: m.text, created_at: at.toISOString(), tz, local_date: localDate(at, tz) };
       if (m.role === "user") {
-        lastUserId = insertMessage({ ...base, role: "user", reply_to: null, content_json: JSON.stringify([{ role: "user", content: m.text }]) }).id;
+        lastUserId = (await insertMessage({ ...base, role: "user", reply_to: null, content_json: JSON.stringify([{ role: "user", content: m.text }]) })).id;
       } else {
         // Reserve the id so evidence rows can point at it before the message (and its job) is written.
         const id = `a_imp${Math.random().toString(36).slice(2, 14)}`;
         const srcMeta: Array<Record<string, unknown>> = [];
-        (m.sources ?? []).forEach((s, i) => {
-          const call = insertSearchCall({ assistantId: id, query: "(imported)", since: null, domains: null, provider: "import", at: at.toISOString() });
-          const evidenceId = insertEvidence({
+        for (const [i, s] of (m.sources ?? []).entries()) {
+          const call = await insertSearchCall({ assistantId: id, query: "(imported)", since: null, domains: null, provider: "import", at: at.toISOString() });
+          const evidenceId = await insertEvidence({
             search_call_id: call,
             assistant_message_id: id,
             ref: `S${i + 1}`,
@@ -53,11 +55,12 @@ export function importConversations(payload: ImportPayload): { conversations: nu
             excerpt: s.excerpt,
           });
           srcMeta.push({ ref: `S${i + 1}`, url: s.url, title: s.title, publishedAt: s.published_at ?? null, retrievedAt: at.toISOString().slice(0, 10), evidenceId });
-        });
-        insertMessage(
+        }
+        const saved = await insertMessage(
           { ...base, id, role: "assistant", reply_to: lastUserId, content_json: JSON.stringify([{ role: "assistant", content: m.text }]), meta: { imported: true, sources: srcMeta } },
           { type: "extract_turn", payload: { assistantMessageId: id } },
         );
+        await publishJob(saved.jobId);
       }
       messages++;
     }

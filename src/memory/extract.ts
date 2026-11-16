@@ -5,6 +5,7 @@
 import { z } from "zod";
 import { evidenceFor, getMessage, saveExtraction, type NewClaim } from "../db/repo";
 import { structured } from "../llm/client";
+import { embed } from "../llm/embed";
 
 export const Extraction = z.object({
   question: z.string().describe("the user's request in one sentence"),
@@ -30,11 +31,11 @@ Extract only what is actually stated. Claims are concrete, checkable facts or de
 - Also extract decisions or lists the user states ("we shortlisted X, Y, Z", "we picked Neon") with speaker "user" and attribute "decision" or "shortlist".`;
 
 export async function extractTurn(assistantMessageId: string): Promise<"done" | "skipped"> {
-  const a = getMessage(assistantMessageId);
+  const a = await getMessage(assistantMessageId);
   if (!a || a.role !== "assistant" || !a.reply_to) return "skipped";
-  const u = getMessage(a.reply_to);
+  const u = await getMessage(a.reply_to);
   if (!u) return "skipped";
-  const evidence = evidenceFor(a.id);
+  const evidence = await evidenceFor(a.id);
   const sources = evidence.map((e) => `[${e.ref}] ${e.title ?? ""} ${e.url} (published ${e.published_at ?? "n/a"})`).join("\n");
 
   const out = await structured(Extraction, "extraction", [
@@ -57,10 +58,16 @@ export async function extractTurn(assistantMessageId: string): Promise<"done" | 
       evidence_id: ev?.id ?? null,
     } as NewClaim;
   });
-  saveExtraction(
+  // Optional: an embedding of the digest for paraphrase recall ("sales software" finding "CRM").
+  const embedding = await embed(`${out.question}\n${out.answer_summary}\n${[...out.keywords, ...out.entities].join(", ")}`).catch((err) => {
+    console.warn(`[extract] embedding failed, keeping full-text only: ${(err as Error).message.slice(0, 120)}`);
+    return null;
+  });
+  await saveExtraction(
     { assistantId: a.id, conversationId: a.conversation_id, localDate: u.local_date, createdAt: a.created_at },
     { question: out.question, answer_summary: out.answer_summary, entities: out.entities, keywords: out.keywords },
     claims,
+    embedding,
   );
   return "done";
 }

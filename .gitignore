@@ -10,3 +10,5 @@ data/
 eval-results.local.md
 *.tsbuildinfo
 .DS_Store
+.vitest/
+eval-results.md

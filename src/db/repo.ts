@@ -1,9 +1,11 @@
-/** All SQL lives here. Small, explicit functions; no ORM. */
+/**
+ * All SQL lives here. Small, explicit functions; no ORM.
+ * Every function runs as the current user (see db/index.ts): row-level security scopes each query,
+ * so none of them filters by user_id itself, and none can reach another user's rows.
+ */
 import { createHash } from "node:crypto";
 import { newId } from "../ids";
-import { db } from "./index";
-
-export const USER_ID = "local";
+import { currentUserId, q, tx } from "./index";
 
 export type ConversationRow = { id: string; title: string | null; created_at: string; updated_at: string };
 export type MessageRow = {
@@ -52,56 +54,73 @@ export type EvidenceRow = {
   excerpt: string;
 };
 
+// ---------- users ----------
+
+/** Create or refresh the current user's row. Called at sign-in (and lazily for bearer tokens). */
+export async function upsertUser(u: { issuer: string; subject: string; displayName: string | null; email: string | null }): Promise<void> {
+  await q(
+    `INSERT INTO users (id, issuer, subject, display_name, email) VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (id) DO UPDATE SET display_name = COALESCE(EXCLUDED.display_name, users.display_name),
+       email = COALESCE(EXCLUDED.email, users.email), last_seen_at = now()`,
+    [currentUserId(), u.issuer, u.subject, u.displayName, u.email],
+  );
+}
+
+export async function getUser(): Promise<{ id: string; display_name: string | null; email: string | null } | undefined> {
+  return (await q<{ id: string; display_name: string | null; email: string | null }>("SELECT id, display_name, email FROM users"))[0];
+}
+
 // ---------- conversations ----------
 
-export function createConversation(title: string | null, at: string): ConversationRow {
+const CONV_COLS = "id, title, created_at, updated_at";
+
+export async function createConversation(title: string | null, at: string): Promise<ConversationRow> {
   const row = { id: newId("c"), title, created_at: at, updated_at: at };
-  db().prepare("INSERT INTO conversations (id, user_id, title, created_at, updated_at) VALUES (@id, 'local', @title, @created_at, @updated_at)").run(row);
+  await q("INSERT INTO conversations (id, title, created_at, updated_at) VALUES ($1, $2, $3, $4)", [row.id, title, at, at]);
   return row;
 }
 
-export function getConversation(id: string): ConversationRow | undefined {
-  return db().prepare("SELECT id, title, created_at, updated_at FROM conversations WHERE id = ?").get(id) as ConversationRow | undefined;
+export async function getConversation(id: string): Promise<ConversationRow | undefined> {
+  return (await q<ConversationRow>(`SELECT ${CONV_COLS} FROM conversations WHERE id = $1`, [id]))[0];
 }
 
-export function listConversations(): Array<ConversationRow & { last_local_date: string | null }> {
-  return db()
-    .prepare(
-      `SELECT c.id, c.title, c.created_at, c.updated_at,
-              (SELECT local_date FROM messages m WHERE m.conversation_id = c.id ORDER BY created_at DESC LIMIT 1) AS last_local_date
-       FROM conversations c WHERE c.user_id = ? ORDER BY c.updated_at DESC`,
-    )
-    .all(USER_ID) as Array<ConversationRow & { last_local_date: string | null }>;
+export async function listConversations(): Promise<Array<ConversationRow & { last_local_date: string | null }>> {
+  return q(
+    `SELECT c.id, c.title, c.created_at, c.updated_at,
+            (SELECT m.local_date FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_local_date
+     FROM conversations c ORDER BY c.updated_at DESC LIMIT 500`,
+  );
 }
 
-export function setConversationTitle(id: string, title: string): void {
-  db().prepare("UPDATE conversations SET title = ? WHERE id = ?").run(title, id);
+export async function setConversationTitle(id: string, title: string): Promise<void> {
+  await q("UPDATE conversations SET title = $1 WHERE id = $2", [title, id]);
 }
 
-export function deleteConversation(id: string): void {
-  const conn = db();
-  conn.transaction(() => {
-    const ids = (conn.prepare("SELECT id FROM messages WHERE conversation_id = ? AND role = 'assistant'").all(id) as Array<{ id: string }>).map((r) => r.id);
-    for (const mid of ids) {
-      conn.prepare("DELETE FROM claims WHERE assistant_message_id = ?").run(mid);
-      conn.prepare("DELETE FROM claims_fts WHERE assistant_message_id = ?").run(mid);
-      conn.prepare("DELETE FROM turn_digests WHERE assistant_message_id = ?").run(mid);
-      conn.prepare("DELETE FROM digests_fts WHERE assistant_message_id = ?").run(mid);
-      conn.prepare("DELETE FROM web_evidence WHERE assistant_message_id = ?").run(mid);
-      conn.prepare("DELETE FROM search_calls WHERE assistant_message_id = ?").run(mid);
+/** Delete a conversation and everything derived from it. Returns false if it isn't this user's. */
+export async function deleteConversation(id: string): Promise<boolean> {
+  return tx(async (run) => {
+    const ids = (await run<{ id: string }>("SELECT id FROM messages WHERE conversation_id = $1 AND role = 'assistant'", [id])).map((r) => r.id);
+    if (ids.length) {
+      await run("DELETE FROM claims WHERE assistant_message_id = ANY($1)", [ids]);
+      await run("DELETE FROM turn_digests WHERE assistant_message_id = ANY($1)", [ids]);
+      await run("DELETE FROM search_calls WHERE assistant_message_id = ANY($1)", [ids]); // cascades to web_evidence
+      await run("UPDATE jobs SET status = 'skipped' WHERE user_id = $1 AND status = 'pending' AND payload->>'assistantMessageId' = ANY($2)", [currentUserId(), ids]);
     }
-    conn.prepare("DELETE FROM messages WHERE conversation_id = ?").run(id);
-    conn.prepare("DELETE FROM conversations WHERE id = ?").run(id);
-  })();
+    const deleted = await run("DELETE FROM conversations WHERE id = $1 RETURNING id", [id]); // cascades to messages
+    return deleted.length > 0;
+  });
 }
 
 // ---------- messages ----------
 
 export type NewMessage = Omit<MessageRow, "id" | "meta_json"> & { id?: string; meta?: unknown };
+export type NewJob = { type: string; payload: Record<string, unknown> };
 
-/** Insert a message. For assistant messages, the extraction job is written in the same transaction (the outbox). */
-export function insertMessage(m: NewMessage, job?: { type: string; payload: unknown }): MessageRow {
-  const conn = db();
+/**
+ * Insert a message. For assistant messages, the extraction job is written in the same transaction
+ * (the outbox): either both exist or neither does. Returns the row and the job id, if any.
+ */
+export async function insertMessage(m: NewMessage, job?: NewJob): Promise<MessageRow & { jobId: string | null }> {
   const row: MessageRow = {
     id: m.id ?? newId(m.role === "user" ? "u" : "a"),
     conversation_id: m.conversation_id,
@@ -114,25 +133,24 @@ export function insertMessage(m: NewMessage, job?: { type: string; payload: unkn
     reply_to: m.reply_to,
     meta_json: m.meta === undefined ? null : JSON.stringify(m.meta),
   };
-  conn.transaction(() => {
-    conn
-      .prepare(
-        `INSERT INTO messages (id, conversation_id, user_id, role, text, content_json, created_at, tz, local_date, reply_to, meta_json)
-         VALUES (@id, @conversation_id, 'local', @role, @text, @content_json, @created_at, @tz, @local_date, @reply_to, @meta_json)`,
-      )
-      .run(row);
-    conn.prepare("UPDATE conversations SET updated_at = ? WHERE id = ?").run(row.created_at, row.conversation_id);
-    if (job) enqueueJob(job.type, job.payload, row.created_at);
-  })();
-  return row;
+  const jobId = await tx(async (run) => {
+    await run(
+      `INSERT INTO messages (id, conversation_id, role, text, content_json, created_at, tz, local_date, reply_to, meta_json)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [row.id, row.conversation_id, row.role, row.text, row.content_json, row.created_at, row.tz, row.local_date, row.reply_to, row.meta_json],
+    );
+    await run("UPDATE conversations SET updated_at = GREATEST(updated_at, $1) WHERE id = $2", [row.created_at, row.conversation_id]);
+    return job ? enqueueJob(job.type, job.payload) : null;
+  });
+  return { ...row, jobId };
 }
 
-export function getMessages(conversationId: string): MessageRow[] {
-  return db().prepare("SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at, rowid").all(conversationId) as MessageRow[];
+export async function getMessages(conversationId: string): Promise<MessageRow[]> {
+  return q("SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at, seq", [conversationId]);
 }
 
-export function getMessage(id: string): MessageRow | undefined {
-  return db().prepare("SELECT * FROM messages WHERE id = ?").get(id) as MessageRow | undefined;
+export async function getMessage(id: string): Promise<MessageRow | undefined> {
+  return (await q<MessageRow>("SELECT * FROM messages WHERE id = $1", [id]))[0];
 }
 
 // ---------- turns (user question + assistant answer) ----------
@@ -141,210 +159,208 @@ const TURN_SELECT = `
   SELECT a.id AS assistant_id, u.id AS user_id_msg, a.conversation_id, c.title AS conversation_title,
          u.local_date, u.created_at, u.text AS question, a.text AS answer
   FROM messages a
-  JOIN messages u ON u.id = a.reply_to
-  JOIN conversations c ON c.id = a.conversation_id
-  WHERE a.role = 'assistant' AND a.user_id = 'local'`;
+  JOIN messages u ON u.user_id = a.user_id AND u.id = a.reply_to
+  JOIN conversations c ON c.user_id = a.user_id AND c.id = a.conversation_id
+  WHERE a.role = 'assistant'`;
 
-export function turnsInRange(start: string, end: string, excludeAssistantIds: string[]): TurnRow[] {
-  const rows = db().prepare(`${TURN_SELECT} AND u.local_date BETWEEN ? AND ? ORDER BY u.created_at`).all(start, end) as TurnRow[];
-  return rows.filter((r) => !excludeAssistantIds.includes(r.assistant_id));
+export async function turnsInRange(start: string, end: string, excludeAssistantIds: string[]): Promise<TurnRow[]> {
+  return q(`${TURN_SELECT} AND u.local_date BETWEEN $1 AND $2 AND NOT (a.id = ANY($3)) ORDER BY u.created_at`, [start, end, excludeAssistantIds]);
 }
 
-export function turnsByIds(ids: string[]): TurnRow[] {
+export async function turnsByIds(ids: string[]): Promise<TurnRow[]> {
   if (!ids.length) return [];
-  const rows = db().prepare(`${TURN_SELECT} AND a.id IN (${ids.map(() => "?").join(",")})`).all(...ids) as TurnRow[];
+  const rows = await q<TurnRow>(`${TURN_SELECT} AND a.id = ANY($1)`, [ids]);
   const order = new Map(ids.map((id, i) => [id, i]));
   return rows.sort((x, y) => order.get(x.assistant_id)! - order.get(y.assistant_id)!);
 }
 
-export function historySpan(): { first: string; last: string; count: number } | null {
-  const r = db().prepare("SELECT MIN(local_date) AS first, MAX(local_date) AS last, COUNT(*) AS count FROM messages WHERE role = 'user' AND user_id = 'local'").get() as {
-    first: string | null;
-    last: string | null;
-    count: number;
-  };
+export async function historySpan(): Promise<{ first: string; last: string; count: number } | null> {
+  const r = (await q<{ first: string | null; last: string | null; count: number }>(
+    "SELECT MIN(local_date) AS first, MAX(local_date) AS last, COUNT(*) AS count FROM messages WHERE role = 'user'",
+  ))[0]!;
   return r.first && r.last ? { first: r.first, last: r.last, count: r.count } : null;
 }
 
 /** Turns on the dates closest to `date` (for "nothing on that day, but here is what I do have"). */
-export function nearestTurns(date: string, limit: number, excludeAssistantIds: string[]): TurnRow[] {
-  const rows = db()
-    .prepare(`${TURN_SELECT} ORDER BY ABS(julianday(u.local_date) - julianday(?)), u.created_at LIMIT ?`)
-    .all(date, limit + excludeAssistantIds.length) as TurnRow[];
-  return rows.filter((r) => !excludeAssistantIds.includes(r.assistant_id)).slice(0, limit);
+export async function nearestTurns(date: string, limit: number, excludeAssistantIds: string[]): Promise<TurnRow[]> {
+  return q(`${TURN_SELECT} AND NOT (a.id = ANY($3)) ORDER BY ABS(u.local_date - $1::date), u.created_at LIMIT $2`, [date, limit, excludeAssistantIds]);
 }
 
 /** Turns of one conversation, newest first. */
-export function lastAssistantIds(conversationId: string, n: number): string[] {
+export async function lastAssistantIds(conversationId: string, n: number): Promise<string[]> {
   return (
-    db().prepare("SELECT id FROM messages WHERE conversation_id = ? AND role = 'assistant' ORDER BY created_at DESC LIMIT ?").all(conversationId, n) as Array<{ id: string }>
+    await q<{ id: string }>("SELECT id FROM messages WHERE conversation_id = $1 AND role = 'assistant' ORDER BY created_at DESC LIMIT $2", [conversationId, n])
   ).map((r) => r.id);
 }
 
-// ---------- full-text search ----------
+// ---------- full-text + vector search ----------
 
-/** Build a safe FTS5 query from free keywords: each token quoted and prefix-matched, OR'd together. */
+/** Build a safe tsquery from free keywords: each token prefix-matched, OR'd together. Tokens are letters/digits only. */
 export function ftsQuery(keywords: string[]): string | null {
   const tokens = [...new Set(keywords.flatMap((k) => k.toLowerCase().split(/[^\p{L}\p{N}]+/u)).filter((t) => t.length >= 2 && !STOP.has(t)))];
   if (!tokens.length) return null;
-  return tokens.map((t) => `"${t}"*`).join(" OR ");
+  return tokens.map((t) => `${t}:*`).join(" | ");
 }
 const STOP = new Set(["the", "and", "for", "you", "what", "did", "was", "are", "with", "that", "this", "about", "from", "have", "has", "can", "our", "any", "how", "who", "which", "when", "since", "still", "your", "they", "them", "then"]);
 
+const RRF_K = 60;
+
 /**
- * Score turns (assistant message ids) by BM25 across raw messages, digests and claims.
- * Returns a map assistant_id -> score (higher is better). Optional restriction to a set of turns.
+ * Score turns (assistant message ids) by fusing ranked lists with reciprocal rank fusion:
+ * full text over raw messages, digests and claims, plus (if an embedding is given) vector
+ * similarity over digests above a minimum similarity. Returns assistant_id -> score (higher is better).
  */
-export function scoreTurns(keywords: string[], restrictTo?: string[]): Map<string, number> {
-  const q = ftsQuery(keywords);
+export async function scoreTurns(
+  keywords: string[],
+  restrictTo?: string[],
+  vector?: { embedding: number[]; minSimilarity: number } | null,
+): Promise<Map<string, number>> {
+  const query = ftsQuery(keywords);
   const scores = new Map<string, number>();
-  if (!q) return scores;
-  const add = (id: string | null, s: number) => {
-    if (!id || (restrictTo && !restrictTo.includes(id))) return;
-    scores.set(id, (scores.get(id) ?? 0) + s);
+  if (!query && !vector) return scores;
+  const restrict = restrictTo ? new Set(restrictTo) : null;
+  const addList = (ids: Array<string | null>, weight: number) => {
+    let rank = 0;
+    const seen = new Set<string>();
+    for (const id of ids) {
+      if (!id || seen.has(id) || (restrict && !restrict.has(id))) continue;
+      seen.add(id);
+      rank++;
+      scores.set(id, (scores.get(id) ?? 0) + weight / (RRF_K + rank));
+    }
   };
-  const conn = db();
-  const msgHits = conn
-    .prepare(
-      `SELECT m.id, m.role, m.reply_to, bm25(messages_fts) AS r FROM messages_fts
-       JOIN messages m ON m.rowid = messages_fts.rowid
-       WHERE messages_fts MATCH ? AND m.user_id = 'local' ORDER BY r LIMIT 200`,
-    )
-    .all(q) as Array<{ id: string; role: string; reply_to: string | null; r: number }>;
-  // Map user messages to the assistant reply that answers them.
-  const replyOf = conn.prepare("SELECT id FROM messages WHERE reply_to = ? LIMIT 1");
-  for (const h of msgHits) {
-    const aid = h.role === "assistant" ? h.id : (replyOf.get(h.id) as { id: string } | undefined)?.id ?? null;
-    add(aid, -h.r);
-  }
-  for (const h of conn.prepare("SELECT assistant_message_id AS id, bm25(digests_fts) AS r FROM digests_fts WHERE digests_fts MATCH ? ORDER BY r LIMIT 100").all(q) as Array<{ id: string; r: number }>)
-    add(h.id, -h.r * 1.5);
-  for (const h of conn.prepare("SELECT assistant_message_id AS id, bm25(claims_fts) AS r FROM claims_fts WHERE claims_fts MATCH ? ORDER BY r LIMIT 200").all(q) as Array<{ id: string; r: number }>)
-    add(h.id, -h.r);
+  await tx(async (run) => {
+    if (query) {
+      // User messages map to the assistant reply that answers them.
+      const msgHits = await run<{ aid: string | null }>(
+        `SELECT CASE WHEN m.role = 'assistant' THEN m.id
+                     ELSE (SELECT a.id FROM messages a WHERE a.user_id = m.user_id AND a.reply_to = m.id LIMIT 1) END AS aid
+         FROM messages m, to_tsquery('english', $1) tq
+         WHERE m.tsv @@ tq ORDER BY ts_rank_cd(m.tsv, tq) DESC LIMIT 200`,
+        [query],
+      );
+      addList(msgHits.map((h) => h.aid), 1);
+      const digestHits = await run<{ id: string }>(
+        `SELECT d.assistant_message_id AS id FROM turn_digests d, to_tsquery('english', $1) tq
+         WHERE d.tsv @@ tq ORDER BY ts_rank_cd(d.tsv, tq) DESC LIMIT 100`,
+        [query],
+      );
+      addList(digestHits.map((h) => h.id), 1.5);
+      const claimHits = await run<{ id: string }>(
+        `SELECT c.assistant_message_id AS id FROM claims c, to_tsquery('english', $1) tq
+         WHERE c.tsv @@ tq ORDER BY ts_rank_cd(c.tsv, tq) DESC LIMIT 200`,
+        [query],
+      );
+      addList(claimHits.map((h) => h.id), 1);
+    }
+    if (vector) {
+      const vecHits = await run<{ id: string; sim: number }>(
+        `SELECT assistant_message_id AS id, 1 - (embedding <=> $1::vector) AS sim FROM turn_digests
+         WHERE embedding IS NOT NULL ORDER BY embedding <=> $1::vector LIMIT 50`,
+        [toVector(vector.embedding)],
+      );
+      addList(vecHits.filter((h) => h.sim >= vector.minSimilarity).map((h) => h.id), 1);
+    }
+  });
   return scores;
 }
 
+export const toVector = (v: number[]) => `[${v.join(",")}]`;
+
 // ---------- digests and claims ----------
 
-export function getDigest(assistantId: string): { question: string; answer_summary: string } | undefined {
-  return db().prepare("SELECT question, answer_summary FROM turn_digests WHERE assistant_message_id = ?").get(assistantId) as
-    | { question: string; answer_summary: string }
-    | undefined;
+export async function getDigest(assistantId: string): Promise<{ question: string; answer_summary: string } | undefined> {
+  return (await q<{ question: string; answer_summary: string }>("SELECT question, answer_summary FROM turn_digests WHERE assistant_message_id = $1", [assistantId]))[0];
 }
 
-export function claimsFor(assistantIds: string[]): ClaimRow[] {
+export async function claimsFor(assistantIds: string[]): Promise<ClaimRow[]> {
   if (!assistantIds.length) return [];
-  return db()
-    .prepare(`SELECT * FROM claims WHERE assistant_message_id IN (${assistantIds.map(() => "?").join(",")}) ORDER BY created_at, rowid`)
-    .all(...assistantIds) as ClaimRow[];
+  return q("SELECT * FROM claims WHERE assistant_message_id = ANY($1) ORDER BY created_at, seq", [assistantIds]);
 }
 
 export type NewClaim = Omit<ClaimRow, "id">;
 
-export function saveExtraction(
+export async function saveExtraction(
   turn: { assistantId: string; conversationId: string; localDate: string; createdAt: string },
   digest: { question: string; answer_summary: string; entities: string[]; keywords: string[] },
   claims: NewClaim[],
-): void {
-  const conn = db();
-  conn.transaction(() => {
+  embedding: number[] | null = null,
+): Promise<void> {
+  await tx(async (run) => {
     // Idempotent: a retried job replaces its own rows.
-    conn.prepare("DELETE FROM turn_digests WHERE assistant_message_id = ?").run(turn.assistantId);
-    conn.prepare("DELETE FROM digests_fts WHERE assistant_message_id = ?").run(turn.assistantId);
-    conn.prepare("DELETE FROM claims WHERE assistant_message_id = ?").run(turn.assistantId);
-    conn.prepare("DELETE FROM claims_fts WHERE assistant_message_id = ?").run(turn.assistantId);
-    conn
-      .prepare(
-        `INSERT INTO turn_digests (assistant_message_id, user_id, conversation_id, local_date, created_at, question, answer_summary, entities, keywords)
-         VALUES (?, 'local', ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(turn.assistantId, turn.conversationId, turn.localDate, turn.createdAt, digest.question, digest.answer_summary, JSON.stringify(digest.entities), digest.keywords.join(" "));
-    conn
-      .prepare("INSERT INTO digests_fts (assistant_message_id, question, answer_summary, keywords) VALUES (?, ?, ?, ?)")
-      .run(turn.assistantId, digest.question, digest.answer_summary, [...digest.keywords, ...digest.entities].join(" "));
-    const ins = conn.prepare(
-      `INSERT INTO claims (id, user_id, assistant_message_id, local_date, speaker, subject, attribute, value, observed_at, published_at, source_url, evidence_id, created_at)
-       VALUES (@id, 'local', @assistant_message_id, @local_date, @speaker, @subject, @attribute, @value, @observed_at, @published_at, @source_url, @evidence_id, @created_at)`,
+    await run("DELETE FROM claims WHERE assistant_message_id = $1", [turn.assistantId]);
+    await run(
+      `INSERT INTO turn_digests (assistant_message_id, conversation_id, local_date, created_at, question, answer_summary, entities, keywords, embedding)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::vector)
+       ON CONFLICT (user_id, assistant_message_id) DO UPDATE SET question = EXCLUDED.question, answer_summary = EXCLUDED.answer_summary,
+         entities = EXCLUDED.entities, keywords = EXCLUDED.keywords, embedding = EXCLUDED.embedding`,
+      [
+        turn.assistantId,
+        turn.conversationId,
+        turn.localDate,
+        turn.createdAt,
+        digest.question,
+        digest.answer_summary,
+        JSON.stringify(digest.entities),
+        [...digest.keywords, ...digest.entities].join(" "),
+        embedding ? toVector(embedding) : null,
+      ],
     );
-    const insFts = conn.prepare("INSERT INTO claims_fts (assistant_message_id, subject, attribute, value) VALUES (?, ?, ?, ?)");
     for (const c of claims) {
-      ins.run({ id: newId("cl"), ...c, local_date: turn.localDate, created_at: turn.createdAt });
-      insFts.run(c.assistant_message_id, c.subject, c.attribute, c.value);
+      await run(
+        `INSERT INTO claims (id, assistant_message_id, local_date, speaker, subject, attribute, value, observed_at, published_at, source_url, evidence_id, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        [newId("cl"), c.assistant_message_id, turn.localDate, c.speaker, c.subject, c.attribute, c.value, c.observed_at, c.published_at, c.source_url, c.evidence_id, turn.createdAt],
+      );
     }
-  })();
+  });
 }
 
 // ---------- web evidence ----------
 
-export function insertSearchCall(c: { assistantId: string; query: string; since: string | null; domains: string[] | null; provider: string; at: string }): string {
+export async function insertSearchCall(c: { assistantId: string; query: string; since: string | null; domains: string[] | null; provider: string; at: string }): Promise<string> {
   const id = newId("sc");
-  db()
-    .prepare("INSERT INTO search_calls (id, assistant_message_id, query, since_date, domains, provider, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .run(id, c.assistantId, c.query, c.since, c.domains ? JSON.stringify(c.domains) : null, c.provider, c.at);
+  await q("INSERT INTO search_calls (id, assistant_message_id, query, since_date, domains, provider, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)", [
+    id,
+    c.assistantId,
+    c.query,
+    c.since,
+    c.domains ? JSON.stringify(c.domains) : null,
+    c.provider,
+    c.at,
+  ]);
   return id;
 }
 
-export function insertEvidence(e: Omit<EvidenceRow, "id">): string {
+export async function searchCallsFor(assistantId: string): Promise<Array<{ query: string; since_date: string | null; domains: string | null }>> {
+  return q("SELECT query, since_date, domains FROM search_calls WHERE assistant_message_id = $1 ORDER BY created_at", [assistantId]);
+}
+
+export async function insertEvidence(e: Omit<EvidenceRow, "id">): Promise<string> {
   const id = newId("ev");
   const hash = createHash("sha256").update(e.excerpt).digest("hex");
-  db()
-    .prepare(
-      `INSERT INTO web_evidence (id, search_call_id, assistant_message_id, ref, url, title, published_at, retrieved_at, excerpt, content_hash)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(id, e.search_call_id, e.assistant_message_id, e.ref, e.url, e.title, e.published_at, e.retrieved_at, e.excerpt, hash);
+  await q(
+    `INSERT INTO web_evidence (id, search_call_id, assistant_message_id, ref, url, title, published_at, retrieved_at, excerpt, content_hash)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [id, e.search_call_id, e.assistant_message_id, e.ref, e.url, e.title, e.published_at, e.retrieved_at, e.excerpt, hash],
+  );
   return id;
 }
 
-export function evidenceFor(assistantId: string): EvidenceRow[] {
-  return db().prepare("SELECT * FROM web_evidence WHERE assistant_message_id = ? ORDER BY rowid").all(assistantId) as EvidenceRow[];
+export async function evidenceFor(assistantId: string): Promise<EvidenceRow[]> {
+  return q("SELECT * FROM web_evidence WHERE assistant_message_id = $1 ORDER BY seq", [assistantId]);
 }
 
-export function evidenceByIds(ids: string[]): EvidenceRow[] {
+export async function evidenceByIds(ids: string[]): Promise<EvidenceRow[]> {
   if (!ids.length) return [];
-  return db().prepare(`SELECT * FROM web_evidence WHERE id IN (${ids.map(() => "?").join(",")})`).all(...ids) as EvidenceRow[];
+  return q("SELECT * FROM web_evidence WHERE id = ANY($1)", [ids]);
 }
 
-// ---------- jobs (durable outbox, drained in-process) ----------
+// ---------- outbox ----------
 
-export type JobRow = { id: string; type: string; payload: string; status: string; attempts: number; last_error: string | null; run_after: string };
-
-export function enqueueJob(type: string, payload: unknown, at: string): string {
+/** Write an outbox row for the current user (inside the caller's transaction, if any). */
+export async function enqueueJob(type: string, payload: Record<string, unknown>): Promise<string> {
   const id = newId("job");
-  // run_after uses the wall clock (not the fake clock) so the worker's schedule is real time.
-  db().prepare("INSERT INTO jobs (id, type, payload, created_at, run_after) VALUES (?, ?, ?, ?, ?)").run(id, type, JSON.stringify(payload), at, new Date().toISOString());
+  await q("INSERT INTO jobs (id, user_id, type, payload) VALUES ($1, $2, $3, $4)", [id, currentUserId(), type, JSON.stringify(payload)]);
   return id;
-}
-
-/** Atomically claim the next due job. */
-export function claimNextJob(): JobRow | undefined {
-  const conn = db();
-  return conn.transaction(() => {
-    const job = conn
-      .prepare("SELECT * FROM jobs WHERE status = 'pending' AND run_after <= ? ORDER BY run_after LIMIT 1")
-      .get(new Date().toISOString()) as JobRow | undefined;
-    if (!job) return undefined;
-    conn.prepare("UPDATE jobs SET status = 'running', attempts = attempts + 1 WHERE id = ?").run(job.id);
-    return { ...job, attempts: job.attempts + 1 };
-  })();
-}
-
-export function finishJob(id: string, status: "done" | "skipped"): void {
-  db().prepare("UPDATE jobs SET status = ?, last_error = NULL WHERE id = ?").run(status, id);
-}
-
-export function failJob(id: string, error: string, attempts: number, maxAttempts: number, backoffMs: number): void {
-  const retryAt = new Date(Date.now() + backoffMs).toISOString();
-  db()
-    .prepare("UPDATE jobs SET status = ?, last_error = ?, run_after = ? WHERE id = ?")
-    .run(attempts >= maxAttempts ? "failed" : "pending", error.slice(0, 1000), retryAt, id);
-}
-
-/** Jobs left 'running' by a crashed process go back to the queue on boot. */
-export function resetRunningJobs(): void {
-  db().prepare("UPDATE jobs SET status = 'pending' WHERE status = 'running'").run();
-}
-
-export function pendingJobCount(): number {
-  return (db().prepare("SELECT COUNT(*) AS n FROM jobs WHERE status IN ('pending','running')").get() as { n: number }).n;
 }

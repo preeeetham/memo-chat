@@ -14,10 +14,51 @@ type Msg = {
   sources: Source[];
   memory: { status: string; resolved: Array<{ expr: string; date: string }>; recalled: Recalled[] } | null;
   timings?: Record<string, number> | null;
+  degraded?: string | null;
   error?: string;
 };
 type Conv = { id: string; title: string | null; updated_at: string; last_local_date: string | null };
-type Settings = { problems: string[]; model: string; searchProvider: string; now: string; fakeNow: string | null };
+type Settings = {
+  problems: string[];
+  model: string;
+  searchProvider: string;
+  now: string;
+  fakeNow: string | null;
+  demoTools: boolean;
+  user: { id: string; name: string | null };
+  budget: { dailyTokens: number; usedToday: number };
+};
+
+/** fetch that sends the user to sign-in when the session is missing or expired. */
+async function api(path: string, init?: RequestInit): Promise<Response> {
+  const res = await fetch(path, init);
+  if (res.status === 401) {
+    window.location.href = "/login";
+    throw new Error("signed out");
+  }
+  return res;
+}
+
+/** Read an SSE body, calling onEvent(seq, event) per event. Resolves when the stream ends. */
+async function readEvents(body: ReadableStream<Uint8Array>, onEvent: (seq: number, e: Record<string, any>) => void): Promise<void> {
+  const reader = body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return;
+    buf += dec.decode(value, { stream: true });
+    let i: number;
+    while ((i = buf.indexOf("\n\n")) >= 0) {
+      const raw = buf.slice(0, i);
+      buf = buf.slice(i + 2);
+      const lines = raw.split("\n");
+      const data = lines.find((l) => l.startsWith("data: "));
+      const id = lines.find((l) => l.startsWith("id: "));
+      if (data) onEvent(id ? Number(id.slice(4)) : 0, JSON.parse(data.slice(6)));
+    }
+  }
+}
 
 const SUGGESTIONS = [
   "On Monday we shortlisted 5 CRM tools for a 20-person sales team. Has any of them changed pricing or shipped something big since?",
@@ -73,22 +114,23 @@ export default function Page() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [userTz, setUserTz] = useState("");
   const abortRef = useRef<AbortController | null>(null);
+  const turnRef = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<string | null>(null);
   activeRef.current = activeId;
 
   const loadConvs = useCallback(async () => {
-    const r = await fetch("/api/conversations").then((x) => x.json());
+    const r = await api("/api/conversations").then((x) => x.json());
     setConvs(r.conversations ?? []);
   }, []);
   const loadSettings = useCallback(async () => {
-    const s = (await fetch("/api/settings").then((x) => x.json())) as Settings;
+    const s = (await api("/api/settings").then((x) => x.json())) as Settings;
     setSettings(s);
     setFakeNowInput(s.fakeNow ?? "");
   }, []);
   const openConv = useCallback(async (id: string) => {
     setSidebarOpen(false);
-    const r = await fetch(`/api/conversations/${id}`).then((x) => x.json());
+    const r = await api(`/api/conversations/${id}`).then((x) => x.json());
     if (r.error) return;
     setActiveId(id);
     setMessages(r.messages);
@@ -116,8 +158,18 @@ export default function Page() {
     return out;
   }, [convs, today]);
 
-  function newChat() {
+  function stopTurn() {
+    if (turnRef.current) void fetch(`/api/chat/${turnRef.current}/stop`, { method: "POST" });
     abortRef.current?.abort();
+  }
+
+  async function signOut() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    window.location.href = "/login";
+  }
+
+  function newChat() {
+    stopTurn();
     setActiveId(null);
     setMessages([]);
     setStatus(null);
@@ -137,8 +189,31 @@ export default function Page() {
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+    turnRef.current = null;
+    let lastSeq = 0;
+    let finished = false;
+    const onEvent = (seq: number, e: Record<string, any>) => {
+      if (seq) lastSeq = seq;
+      if (e.type === "start") {
+        turnRef.current = e.assistantMessageId;
+        if (!activeRef.current) setActiveId(e.conversationId);
+        activeRef.current = e.conversationId;
+      } else if (e.type === "status") setStatus(e.text);
+      else if (e.type === "memory") update((a) => ({ ...a, memory: { status: e.status, resolved: e.resolved, recalled: e.recalled } }));
+      else if (e.type === "text") {
+        setStatus(null);
+        update((a) => ({ ...a, text: a.text + e.delta }));
+      } else if (e.type === "sources") update((a) => ({ ...a, sources: [...a.sources, ...e.sources] }));
+      else if (e.type === "done") {
+        finished = true;
+        update((a) => ({ ...a, id: e.assistantMessageId, timings: e.timings }));
+      } else if (e.type === "error") {
+        finished = true;
+        update((a) => ({ ...a, error: e.message }));
+      }
+    };
     try {
-      const res = await fetch("/api/chat", {
+      const res = await api("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ conversationId: activeRef.current, text: t, tz: tz() }),
@@ -149,57 +224,49 @@ export default function Page() {
         update((a) => ({ ...a, error: err.error ?? "Request failed" }));
         return;
       }
-      const reader = res.body.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let i: number;
-        while ((i = buf.indexOf("\n\n")) >= 0) {
-          const raw = buf.slice(0, i);
-          buf = buf.slice(i + 2);
-          const data = raw.split("\n").find((l) => l.startsWith("data: "));
-          if (!data) continue;
-          const e = JSON.parse(data.slice(6));
-          if (e.type === "start") {
-            if (!activeRef.current) setActiveId(e.conversationId);
-            activeRef.current = e.conversationId;
-          } else if (e.type === "status") setStatus(e.text);
-          else if (e.type === "memory") update((a) => ({ ...a, memory: { status: e.status, resolved: e.resolved, recalled: e.recalled } }));
-          else if (e.type === "text") {
-            setStatus(null);
-            update((a) => ({ ...a, text: a.text + e.delta }));
-          } else if (e.type === "sources") update((a) => ({ ...a, sources: [...a.sources, ...e.sources] }));
-          else if (e.type === "done") update((a) => ({ ...a, id: e.assistantMessageId, timings: e.timings }));
-          else if (e.type === "error") update((a) => ({ ...a, error: e.message }));
+      // The server keeps the turn running if the connection drops; resume from the last event we saw.
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await readEvents(attempt === 0 ? res.body : await resume(), onEvent);
+        } catch (err) {
+          if ((err as Error).name === "AbortError") throw err;
         }
+        if (finished || ctrl.signal.aborted || !turnRef.current || attempt >= 3) break;
+        setStatus("Reconnecting…");
+        await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
       }
+      if (!finished && !ctrl.signal.aborted) update((a) => ({ ...a, error: "Connection lost. The answer is saved; reopen the conversation to see it." }));
     } catch (err) {
       if ((err as Error).name !== "AbortError") update((a) => ({ ...a, error: "Connection lost." }));
     } finally {
       setBusy(false);
       setStatus(null);
       abortRef.current = null;
+      turnRef.current = null;
       void loadConvs();
+    }
+
+    async function resume(): Promise<ReadableStream<Uint8Array>> {
+      const r = await api(`/api/chat/${turnRef.current}/events?after=${lastSeq}`, { signal: ctrl.signal });
+      if (!r.ok || !r.body) throw new Error("resume failed");
+      return r.body;
     }
   }
 
   async function loadDemo() {
     setStatus("Loading demo history…");
-    await fetch("/api/seed", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tz: tz() }) });
+    await api("/api/seed", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tz: tz() }) });
     setStatus(null);
     await loadConvs();
   }
 
   async function applyFakeNow(value: string | null) {
-    await fetch("/api/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ fakeNow: value }) });
+    await api("/api/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ fakeNow: value }) });
     await loadSettings();
   }
 
   async function del(id: string) {
-    await fetch(`/api/conversations/${id}`, { method: "DELETE" });
+    await api(`/api/conversations/${id}`, { method: "DELETE" });
     if (id === activeId) newChat();
     await loadConvs();
   }
@@ -243,13 +310,27 @@ export default function Page() {
           ))}
         </nav>
         <footer>
+          {settings && (
+            <div className="who">
+              Signed in as <strong>{settings.user.name ?? settings.user.id}</strong> · <button onClick={() => void signOut()}>sign out</button>
+              {settings.budget.dailyTokens > 0 && (
+                <div title="Your daily token budget">
+                  {Math.min(100, Math.round((settings.budget.usedToday / settings.budget.dailyTokens) * 100))}% of today&apos;s budget used
+                </div>
+              )}
+            </div>
+          )}
           <div>
-            {settings ? `${settings.model} · search: ${settings.searchProvider}` : "…"}{" "}
-            · <button onClick={() => setShowSettings((s) => !s)}>{showSettings ? "hide demo tools" : "demo tools"}</button>
+            {settings ? `${settings.model} · search: ${settings.searchProvider}` : "…"}
+            {settings?.demoTools && (
+              <>
+                {" "}· <button onClick={() => setShowSettings((s) => !s)}>{showSettings ? "hide demo tools" : "demo tools"}</button>
+              </>
+            )}
           </div>
           {showSettings && (
             <div className="settings">
-              <span className="demo-tag">Demo / testing only</span>
+              <span className="demo-tag">Demo / testing only. The clock is shared by everyone on this server.</span>
               <div className="row">
                 <button onClick={() => void loadDemo()}>Load demo history</button>
               </div>
@@ -270,7 +351,7 @@ export default function Page() {
       <main className="main">
         {settings && settings.problems.length > 0 && (
           <div className="banner">
-            Setup needed: {settings.problems.join(" ")} Copy <code>.env.example</code> to <code>.env</code>, fill it in, and restart <code>npm run dev</code>.
+            Setup needed: {settings.problems.join(" ")} Copy <code>.env.example</code> to <code>.env</code>, fill it in, and restart (<code>docker compose up</code> or <code>npm run dev</code>).
           </div>
         )}
         <button className="menu-btn" onClick={() => setSidebarOpen((s) => !s)}>☰ Conversations</button>
@@ -304,6 +385,7 @@ export default function Page() {
                         <div className="status"><span className="dot" />{status}</div>
                       )}
                       {m.error && <div className="error">{m.error}</div>}
+                      {m.degraded && <div className="meta"><span className="chip" title="The main model was unavailable">answered by fallback model {m.degraded}</span></div>}
                       {m.memory && m.memory.status !== "not_needed" && (
                         <div className="meta">
                           {m.memory.resolved.map((r) => (
@@ -359,7 +441,7 @@ export default function Page() {
               }}
             />
             {busy ? (
-              <button type="button" onClick={() => abortRef.current?.abort()}>Stop</button>
+              <button type="button" onClick={stopTurn}>Stop</button>
             ) : (
               <button type="submit" disabled={!input.trim()}>Send</button>
             )}

@@ -4,7 +4,7 @@ import { now } from "../clock";
 import { config } from "../config";
 import { createConversation, getConversation, getMessages, insertMessage, setConversationTitle, type MessageRow } from "../db/repo";
 import { newId } from "../ids";
-import { kickJobs } from "../memory/jobs";
+import { publishJob } from "../memory/jobs";
 import { SearchSession } from "../search/tool";
 import type { ChatEvent } from "../sse";
 import { describeNow, localDate, safeTz, shortLabel } from "../time/local";
@@ -26,12 +26,13 @@ export async function runTurn(input: TurnInput, emit: (e: ChatEvent) => void, si
   const text = input.text.trim();
 
   // 1. Conversation + user message.
-  let conv = input.conversationId ? getConversation(input.conversationId) : undefined;
+  // A conversation id that isn't this user's is invisible under row-level security: start a new one.
+  let conv = input.conversationId ? await getConversation(input.conversationId) : undefined;
   const isNew = !conv;
-  if (!conv) conv = createConversation(null, at.toISOString());
-  const prior = getMessages(conv.id);
+  if (!conv) conv = await createConversation(null, at.toISOString());
+  const prior = await getMessages(conv.id);
   const userMsg: ChatCompletionMessageParam = { role: "user", content: text };
-  const userRow = insertMessage({
+  const userRow = await insertMessage({
     conversation_id: conv.id,
     role: "user",
     text,
@@ -53,7 +54,7 @@ export async function runTurn(input: TurnInput, emit: (e: ChatEvent) => void, si
 
   // 3. Dates, in code.  4. Recall, in SQL.
   const resolutions = resolveAll(p.time_expressions, at, tz);
-  const bundle = recall(p, resolutions, conv.id);
+  const bundle = await recall(p, resolutions, conv.id);
   mark("recall");
   emit({
     type: "memory",
@@ -96,7 +97,7 @@ export async function runTurn(input: TurnInput, emit: (e: ChatEvent) => void, si
 
   // 6. Persist the answer and its extraction job in one transaction (the outbox).
   const trivial = p.task === "chat" && !p.entities.length && !search.sources.length;
-  insertMessage(
+  const saved = await insertMessage(
     {
       id: assistantId,
       conversation_id: conv.id,
@@ -114,6 +115,8 @@ export async function runTurn(input: TurnInput, emit: (e: ChatEvent) => void, si
         sources: search.sources,
         rounds: result.rounds,
         searches: result.searches,
+        tokens: result.tokens,
+        fallbackModel: result.fallbackModel,
       },
     },
     trivial ? undefined : { type: "extract_turn", payload: { assistantMessageId: assistantId } },
@@ -121,13 +124,13 @@ export async function runTurn(input: TurnInput, emit: (e: ChatEvent) => void, si
   let title: string | undefined;
   if (isNew) {
     title = text.length > 60 ? `${text.slice(0, 57)}…` : text;
-    setConversationTitle(conv.id, title);
+    await setConversationTitle(conv.id, title);
   }
   console.log(`[turn] ${p.task}/${p.source} memory=${bundle.status} rounds=${result.rounds} searches=${result.searches} ` + Object.entries(timings).map(([k, v]) => `${k}=${v}ms`).join(" "));
   emit({ type: "done", assistantMessageId: assistantId, timings, title });
 
-  // 7. Extraction runs after the response, in-process.
-  kickJobs();
+  // 7. Extraction runs after the response, in the worker. Publishing is best effort; the worker's sweep covers a miss.
+  await publishJob(saved.jobId);
 }
 
 /** This conversation's stored API messages, replayed unchanged (append-only), last N turns. */
@@ -138,7 +141,7 @@ function replayHistory(rows: MessageRow[]): ChatCompletionMessageParam[] {
   return rows.slice(from).flatMap((r) => JSON.parse(r.content_json) as ChatCompletionMessageParam[]);
 }
 
-function memoryStatus(b: ReturnType<typeof recall>): string | null {
+function memoryStatus(b: Awaited<ReturnType<typeof recall>>): string | null {
   if (b.status === "not_needed") return null;
   if (b.status === "none") return "No matching past conversation found";
   const days = [...new Set(b.turns.map((t) => shortLabel(t.local_date)))];

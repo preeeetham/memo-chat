@@ -1,18 +1,22 @@
 # Mini Chat
 
-A chat agent with one tool, web search, that remembers your past conversations. Ask it "Last Tuesday I asked you about Postgres hosting. Has any pricing changed since then?" and it works out which Tuesday you mean, finds what it told you then, re-checks the vendors' own pricing pages, and reports per item what changed, with sources and dates.
+A chat agent with one tool, web search, that remembers each user's past conversations. Ask it "Last Tuesday I asked you about Postgres hosting. Has any pricing changed since then?" and it works out which Tuesday you mean, finds what it told you then, re-checks the vendors' own pricing pages, and reports per item what changed, with sources and dates.
 
-See [DESIGN.md](DESIGN.md) for how it works and why.
+It is multi-user: sign-in (OIDC, or a dev login), Postgres with row-level security per user, Redis for caches, limits and resumable streams, and a separate worker that indexes each turn after the reply. See [DESIGN.md](DESIGN.md) for how it works and why.
 
-## Run it
+## Quickstart
 
-Requires Node 22+.
+Requires Docker.
 
 ```bash
-cp .env.example .env     # add LLM_API_KEY and EXA_API_KEY
-npm install
-npm run dev              # http://localhost:3000
+git clone https://github.com/preeeetham/mini-chat && cd mini-chat
+cp .env.example .env     # fill in LLM_API_KEY and EXA_API_KEY
+docker compose up --build
 ```
+
+Open http://localhost:3000 and sign in as **demo** (dev sign-in, no password) to see three preloaded, backdated conversations. Then try the suggested questions. Sign in as any other name to get an empty, separate history.
+
+`docker compose up` starts Postgres (with pgvector), Redis, runs the migrations, seeds the demo history (`SEED_DEMO=true`), and starts the app and the worker. Nothing else needs configuring.
 
 Keys:
 
@@ -23,14 +27,47 @@ Keys:
 
 If a key is missing the app still starts and tells you what to fill in.
 
+## What runs
+
+```
+app      Next.js UI + API (stateless; scale with --scale app=N behind a load balancer)
+worker   post-turn extraction: digests, claims ledger, embeddings (--scale worker=N)
+postgres conversations, messages, digests, claims, web evidence, outbox; RLS per user
+redis    plan/search/embedding caches, rate limits + token budgets, SSE buffers, job stream
+migrate  one-shot: applies db/migrations, creates the app's non-superuser role
+seed     one-shot: demo history for user "demo" (SEED_DEMO=false to skip)
+```
+
+## Sign-in
+
+- **`AUTH_MODE=dev`** (default): pick any username, no password. For local use only.
+- **`AUTH_MODE=oidc`**: any OpenID Connect provider (Auth0, Okta, Cognito, Keycloak, Google, Entra, Clerk). Set `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` (if the client is confidential), `PUBLIC_URL`, and a real `AUTH_SECRET`; register `PUBLIC_URL/api/auth/callback` as the redirect URI. API clients can also send the provider's token as `Authorization: Bearer …`.
+
+For anything shared, also set `DEMO_TOOLS=false` (the demo clock is server-wide) and `SEED_DEMO=false`.
+
+The verified user id becomes `app.user_id` for the database transaction, and every table's row-level security policy checks it. The app connects as a role that cannot bypass RLS.
+
+## Limits and fallbacks
+
+| Setting | Default | |
+|---|---|---|
+| `DAILY_TOKEN_BUDGET` | 300000 | per user per UTC day; 0 = unlimited |
+| `RATE_LIMIT_PER_MINUTE` | 20 | chat turns per user |
+| `LLM_FALLBACK_MODEL` | (none) | used when the main model is rate-limited or down; the answer is marked degraded |
+| `SEARCH_FALLBACK_PROVIDER` | (none) | e.g. `tavily` when Exa fails |
+| `EMBEDDING_MODEL` | `gemini-embedding-001` | hybrid recall (full text + vectors); empty = full text only |
+
+If Redis is down the app keeps working: caches are skipped, limits are counted per process, and the worker picks up jobs from Postgres.
+
 ## Try the memory without waiting a week
 
-Open **demo tools** (bottom left) and click **Load demo history**, or run `npm run seed`. That writes three backdated conversations, dated relative to today in your timezone: a CRM shortlist last Monday, a Node.js question on 3 November, and Postgres hosting prices last Tuesday. They are marked `[demo]` and their contents are illustrative. Then ask the suggested questions on the start screen.
+Sign in as `demo`, or open **demo tools** (bottom left) and click **Load demo history** to load it into your own account. That writes three backdated conversations, dated relative to today: a CRM shortlist last Monday, a Node.js question on 3 November, and Postgres hosting prices last Tuesday. They are marked `[demo]` and their contents are illustrative.
 
-You can also freeze the clock (demo tools, or `MINICHAT_FAKE_NOW` in `.env`) and load your own transcripts:
+You can also freeze the clock (demo tools, or `MINICHAT_FAKE_NOW` in `.env`) and load your own transcripts into your account:
 
 ```bash
-curl -X POST localhost:3000/api/import -H 'content-type: application/json' -d '{
+TOKEN=$(curl -s -X POST localhost:3000/api/auth/dev-login -H 'content-type: application/json' -d '{"username":"alice"}' | node -pe 'JSON.parse(require("fs").readFileSync(0)).token')
+curl -X POST localhost:3000/api/import -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{
   "tz": "Asia/Kolkata",
   "conversations": [{ "title": "Vector DBs", "messages": [
     { "role": "user", "text": "Compare Pinecone and Weaviate pricing", "created_at": "2026-11-02T10:00:00+05:30" },
@@ -39,14 +76,27 @@ curl -X POST localhost:3000/api/import -H 'content-type: application/json' -d '{
 }'
 ```
 
+## Developing without the app container
+
+```bash
+docker compose up -d postgres redis migrate    # databases + schema
+npm install
+npm run dev                                    # http://localhost:3000
+npm run worker                                 # in another terminal
+```
+
+The defaults in `src/config.ts` point at the compose ports (Postgres 5433, Redis 6380), so `.env` only needs the API keys.
+
 ## Scripts
 
 | Command | What it does |
 |---|---|
-| `npm run dev` | App + API on one port |
-| `npm test` | Unit tests (date resolution, timezone edges) |
-| `npm run seed` | Load demo history into `./data/minichat.db` |
-| `npm run eval` | Run the sample questions and edge cases against seeded history with a frozen clock in a temp DB; writes `eval-results.md` |
+| `npm test` | Unit tests (dates, auth, search gateway, limits) and, if the compose Postgres is up, the isolation tests |
+| `npm run test:integration` | Two users in one database: neither can read, find, recall, change or delete the other's history |
+| `npm run smoke` | End to end against the running stack: sign-in, isolation over HTTP, a real streamed turn, resume, the worker indexing it |
+| `npm run eval` | The sample questions and edge cases against seeded history with a frozen clock, in a throwaway database; writes `eval-results.md` |
+| `npm run migrate` | Apply `db/migrations` (idempotent) |
+| `npm run seed -- --user alice` | Demo history for a dev user (`--drain` indexes it without a worker) |
 | `npm run typecheck` | `tsc --noEmit` |
 
 On a free-tier Gemini key (15 requests/minute) the eval pauses between scenarios; set `EVAL_PAUSE_MS=0` on a paid key.
@@ -54,14 +104,18 @@ On a free-tier Gemini key (15 requests/minute) the eval pauses between scenarios
 ## Layout
 
 ```
-app/                      Next.js UI (page.tsx) and API routes (chat SSE, conversations, import, seed, settings)
+app/                      Next.js UI (page.tsx, login/) and API routes (chat SSE + resume + stop, conversations, import, seed, settings, auth, health)
 src/agent/turn.ts         one turn end to end
-src/agent/planner.ts      helper-model classification, regex fallback
+src/agent/planner.ts      helper-model classification (cached), regex fallback
 src/time/resolve.ts       "last Tuesday" -> dates (pure, tested)
-src/agent/recall.ts       SQL-only memory retrieval -> evidence bundle
-src/agent/loop.ts         streaming tool loop (OpenAI-compatible, Gemini-aware)
-src/search/               web_search tool, Exa / Tavily providers, evidence persistence
-src/memory/               post-turn extraction (digest + claims ledger), durable job queue, import
-src/db/                   schema (SQLite + FTS5) and all SQL
-scripts/                  seed, eval
+src/agent/recall.ts       SQL-only memory retrieval (date range + full text + vectors, RRF) -> evidence bundle
+src/agent/loop.ts         streaming tool loop (OpenAI-compatible, Gemini-aware), model fallback, token metering
+src/search/               web_search tool, gateway (shared cache, coalescing, fallback), Exa / Tavily providers
+src/memory/               post-turn extraction (digest + claims ledger + embedding), outbox + worker loop, import
+src/auth/                 sessions, OIDC (code flow + PKCE, bearer tokens), dev sign-in
+src/db/                   Postgres access as the current user (RLS), all SQL, migrations runner
+src/redis.ts, budget.ts, stream.ts   Redis client, per-user limits, resumable SSE buffers
+src/worker/main.ts        the worker process
+db/migrations/            schema, indexes, row-level security policies
+scripts/                  migrate, seed, eval, smoke
 ```

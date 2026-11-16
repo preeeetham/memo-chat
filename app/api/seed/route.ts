@@ -1,13 +1,15 @@
+import { withUser } from "../../../src/auth";
+import { config } from "../../../src/config";
 import { seedDemo } from "../../../src/demo/seed";
-import { kickJobs } from "../../../src/memory/jobs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Dev/demo only: load backdated demo conversations. */
+/** Demo only: load backdated demo conversations into the caller's own history. */
 export async function POST(req: Request): Promise<Response> {
-  const body = (await req.json().catch(() => ({}))) as { tz?: string };
-  const result = seedDemo(body.tz ?? "UTC");
-  kickJobs();
-  return Response.json(result);
+  return withUser(req, async () => {
+    if (!config().demoTools) return Response.json({ error: "demo tools are off (DEMO_TOOLS=false)" }, { status: 403 });
+    const body = (await req.json().catch(() => ({}))) as { tz?: string };
+    return Response.json(await seedDemo(body.tz ?? "UTC"));
+  });
 }

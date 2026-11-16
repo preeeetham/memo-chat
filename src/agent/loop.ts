@@ -4,8 +4,9 @@
  * index, thought signatures in `extra_content` that must be sent back unchanged).
  */
 import type { ChatCompletionMessageParam, ChatCompletionMessageToolCall, ReasoningEffort } from "openai/resources";
+import { recordTokens } from "../budget";
 import { config } from "../config";
-import { llm } from "../llm/client";
+import { isFallbackError, llm } from "../llm/client";
 import { WebSearchInput, webSearchTool, type SearchSession } from "../search/tool";
 import type { ChatEvent } from "../sse";
 import { ANSWER_NOW } from "./prompt";
@@ -20,6 +21,9 @@ export type LoopResult = {
   searches: number;
   ttftMs: number | null;
   finishReason: string | null;
+  /** Set when the primary model failed and LLM_FALLBACK_MODEL answered (shown as degraded). */
+  fallbackModel: string | null;
+  tokens: number;
 };
 
 export async function runLoop(opts: {
@@ -39,6 +43,9 @@ export async function runLoop(opts: {
   let searches = 0;
   let finishReason: string | null = null;
   let round = 0;
+  let model = config().llm.model;
+  let fallbackModel: string | null = null;
+  let tokens = 0;
 
   for (; ; round++) {
     const toolsAllowed = opts.allowTools !== false && round < maxToolRounds;
@@ -51,22 +58,37 @@ export async function runLoop(opts: {
       produced.push(nudge);
     }
 
-    const stream = await llm().chat.completions.create(
-      {
-        model: config().llm.model,
-        messages: convo,
-        stream: true,
-        reasoning_effort: opts.effort,
-        max_completion_tokens: 8000,
-        ...(toolsAllowed ? { tools: [webSearchTool], tool_choice: "auto" as const } : {}),
-      },
-      { signal: opts.signal },
-    );
+    const open = (m: string) =>
+      llm().chat.completions.create(
+        {
+          model: m,
+          messages: convo,
+          stream: true,
+          stream_options: { include_usage: true },
+          reasoning_effort: opts.effort,
+          max_completion_tokens: 8000,
+          ...(toolsAllowed ? { tools: [webSearchTool], tool_choice: "auto" as const } : {}),
+        },
+        { signal: opts.signal },
+      );
+    let stream: Awaited<ReturnType<typeof open>>;
+    try {
+      stream = await open(model);
+    } catch (err) {
+      // Primary model rate-limited, overloaded or down: answer with the fallback model, flagged as degraded.
+      const fb = config().llm.fallbackModel;
+      if (!fb || fb === model || !isFallbackError(err) || opts.signal?.aborted) throw err;
+      console.warn(`[loop] ${model} failed (${(err as { status?: number }).status}); falling back to ${fb}`);
+      model = fallbackModel = fb;
+      opts.emit({ type: "status", text: `Main model unavailable; answering with ${fb} (degraded)…` });
+      stream = await open(model);
+    }
 
     let roundText = "";
     let messageExtra: unknown;
     const calls: ToolCallAcc[] = [];
     for await (const chunk of stream) {
+      if (chunk.usage?.total_tokens) tokens += chunk.usage.total_tokens;
       const choice = chunk.choices[0];
       if (!choice) continue;
       const delta = choice.delta as typeof choice.delta & { extra_content?: unknown };
@@ -134,7 +156,10 @@ export async function runLoop(opts: {
     opts.emit({ type: "status", text: "Reading results…" });
   }
 
-  return { text, messages: produced, rounds: round, searches, ttftMs: ttft, finishReason };
+  // Streams that report no usage are metered by size (~4 characters per token).
+  if (!tokens) tokens = Math.ceil((JSON.stringify(convo).length + text.length) / 4);
+  await recordTokens(tokens);
+  return { text, messages: produced, rounds: round, searches, ttftMs: ttft, finishReason, fallbackModel, tokens };
 }
 
 type ToolCallDelta = { index?: number; id?: string; function?: { name?: string; arguments?: string }; extra_content?: unknown };

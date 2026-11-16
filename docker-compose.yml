@@ -1,0 +1,88 @@
+# docker compose up --build   ->  http://localhost:3000
+# Postgres (with pgvector) + Redis + migrations + optional demo seed + app + worker.
+# The only input needed is API keys in .env (copy .env.example). Values below are local-only defaults.
+name: mini-chat
+
+# One image for app, worker, migrate and seed. Only `migrate` builds it; the others reuse it.
+x-app: &app
+  image: mini-chat:local
+  pull_policy: never
+  env_file:
+    - path: .env
+      required: false
+  environment: &app-env
+    DATABASE_URL: postgres://minichat_app:${APP_DB_PASSWORD:-minichat_app}@postgres:5432/minichat
+    MIGRATE_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/minichat
+    REDIS_URL: redis://redis:6379
+    AUTH_SECRET: ${AUTH_SECRET:-dev-only-insecure-secret-change-me}
+    PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: minichat
+    ports: ["${POSTGRES_PORT:-5433}:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d minichat"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports: ["${REDIS_PORT:-6380}:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    <<: *app
+    build: .
+    pull_policy: build
+    command: ["node_modules/.bin/tsx", "scripts/migrate.ts"]
+    restart: "no"
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  seed:
+    <<: *app
+    command: ["node_modules/.bin/tsx", "scripts/seed.ts", "--if-enabled"]
+    environment:
+      <<: *app-env
+      SEED_DEMO: ${SEED_DEMO:-true}
+      TZ_DEMO: ${TZ_DEMO:-UTC}   # demo dates are relative to "today" in this timezone
+    restart: "no"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+  app:
+    <<: *app
+    ports: ["${APP_PORT:-3000}:3000"]
+    restart: unless-stopped
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  worker:
+    <<: *app
+    command: ["node_modules/.bin/tsx", "src/worker/main.ts"]
+    restart: unless-stopped
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+volumes:
+  pgdata:

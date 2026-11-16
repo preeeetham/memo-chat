@@ -2,11 +2,12 @@
 import type { ChatCompletionFunctionTool } from "openai/resources";
 import { z } from "zod";
 import { now } from "../clock";
-import { config } from "../config";
+import { config, type SearchProviderName } from "../config";
 import { insertEvidence, insertSearchCall } from "../db/repo";
 import { localDate } from "../time/local";
 import { jsonSchemaOf } from "../llm/client";
 import { exaProvider } from "./exa";
+import { cachedProvider, withFallback } from "./gateway";
 import { mockProvider } from "./mock";
 import type { SearchProvider, SearchResult } from "./provider";
 import { tavilyProvider } from "./tavily";
@@ -41,11 +42,20 @@ export const webSearchTool: ChatCompletionFunctionTool = {
 
 export type Source = { ref: string; url: string; title: string; publishedAt: string | null; retrievedAt: string; evidenceId: string };
 
+function providerByName(name: SearchProviderName): SearchProvider | null {
+  const c = config().search;
+  if (name === "tavily") return c.tavilyKey ? tavilyProvider(c.tavilyKey) : null;
+  if (name === "mock") return mockProvider();
+  return c.exaKey ? exaProvider(c.exaKey) : null;
+}
+
+/** The configured provider, behind the gateway: fallback provider, shared cache, coalescing. */
 export function searchProvider(): SearchProvider {
   const c = config().search;
-  if (c.provider === "tavily") return tavilyProvider(c.tavilyKey);
-  if (c.provider === "mock") return mockProvider();
-  return exaProvider(c.exaKey);
+  const primary = providerByName(c.provider) ?? (c.provider === "tavily" ? tavilyProvider("") : exaProvider(""));
+  const secondary = c.fallback && c.fallback !== c.provider ? providerByName(c.fallback) : null;
+  const p = withFallback(primary, secondary);
+  return c.provider === "mock" ? p : cachedProvider(p);
 }
 
 /** Per-turn state: stable [S#] ids and URL de-duplication across all tool calls in the turn. */
@@ -74,7 +84,7 @@ export class SearchSession {
           numResults: resultsPerQuery,
           timeoutMs: searchTimeoutMs,
         });
-        const callId = insertSearchCall({
+        const callId = await insertSearchCall({
           assistantId: this.assistantId,
           query,
           since: input.read_pages ? null : (input.since ?? null),
@@ -89,30 +99,34 @@ export class SearchSession {
     const blocks: string[] = [];
     const newSources: Source[] = [];
     let failed = 0;
-    settled.forEach((s, i) => {
+    for (const [i, s] of settled.entries()) {
       const query = input.queries[i]!;
       if (s.status === "rejected") {
         failed++;
         blocks.push(`Query "${query}": failed (${String(s.reason?.message ?? s.reason).slice(0, 120)})`);
-        return;
+        continue;
       }
       const lines: string[] = [];
       for (const r of s.value.results) {
         if (!r.excerpt) continue;
         const known = this.byUrl.get(r.url);
-        const src = known ?? this.persist(s.value.callId, r, retrievedAt);
+        const src = known ?? (await this.persist(s.value.callId, r, retrievedAt));
         if (!known) newSources.push(src);
         lines.push(formatResult(src, r));
       }
       blocks.push(`Query "${query}"${input.since && !input.read_pages ? ` (published since ${input.since})` : ""}:\n${lines.length ? lines.join("\n\n") : "(no results)"}`);
-    });
+    }
     if (failed === input.queries.length) throw new Error(blocks.join("\n"));
     return { text: blocks.join("\n\n---\n\n"), newSources, failed };
   }
 
-  private persist(callId: string, r: SearchResult, retrievedAt: string): Source {
+  private async persist(callId: string, r: SearchResult, retrievedAt: string): Promise<Source> {
     const ref = `S${this.sources.length + 1}`;
-    const evidenceId = insertEvidence({
+    // Reserve the ref and url before awaiting, so parallel calls in the same turn can't collide.
+    const placeholder: Source = { ref, url: r.url, title: r.title, publishedAt: r.publishedAt, retrievedAt, evidenceId: "" };
+    this.sources.push(placeholder);
+    this.byUrl.set(r.url, placeholder);
+    placeholder.evidenceId = await insertEvidence({
       search_call_id: callId,
       assistant_message_id: this.assistantId,
       ref,
@@ -122,10 +136,7 @@ export class SearchSession {
       retrieved_at: retrievedAt,
       excerpt: r.excerpt,
     });
-    const src: Source = { ref, url: r.url, title: r.title, publishedAt: r.publishedAt, retrievedAt, evidenceId };
-    this.sources.push(src);
-    this.byUrl.set(r.url, src);
-    return src;
+    return placeholder;
   }
 }
 

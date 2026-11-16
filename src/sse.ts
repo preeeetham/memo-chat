@@ -12,6 +12,6 @@ export type ChatEvent =
   | { type: "done"; assistantMessageId: string; timings: Record<string, number>; title?: string }
   | { type: "error"; message: string };
 
-export function encodeEvent(e: ChatEvent): string {
-  return `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`;
+export function encodeEvent(e: ChatEvent, id?: number): string {
+  return `${id !== undefined ? `id: ${id}\n` : ""}event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`;
 }

@@ -14,6 +14,7 @@ import {
   turnsInRange,
   type TurnRow,
 } from "../db/repo";
+import { embed } from "../llm/embed";
 import { addDays } from "../time/local";
 import type { DateRange, Resolution } from "../time/resolve";
 import type { Plan } from "./planner";
@@ -47,14 +48,23 @@ const BUNDLE_CHARS = 14_000; // ~3.5k tokens
 
 const PRICE_ATTR = /price|pricing|cost|plan|tier|seat|fee|limit|quota/i;
 
-export function recall(p: Plan, resolutions: Resolution[], conversationId: string): EvidenceBundle {
+export async function recall(p: Plan, resolutions: Resolution[], conversationId: string): Promise<EvidenceBundle> {
   const resolved = resolutions.map((r) => ({ expr: r.expr, date: rangeLabel(r.candidates[0]!) }));
   if (!p.needs_memory) return { status: "not_needed", resolved, turns: [] };
 
   // Turns already visible in the replayed history don't need to be recalled again.
-  const exclude = lastAssistantIds(conversationId, config().limits.historyTurns);
+  const exclude = await lastAssistantIds(conversationId, config().limits.historyTurns);
   const keywords = [...p.topic_keywords, ...p.entities];
-  const span = historySpan();
+  const span = await historySpan();
+  // Hybrid recall: full text always; vector similarity too when embeddings are configured.
+  const qvec = keywords.length
+    ? await embed(keywords.join(", ")).catch((err) => {
+        console.warn(`[recall] query embedding failed, full-text only: ${(err as Error).message.slice(0, 120)}`);
+        return null;
+      })
+    : null;
+  const vector = qvec ? { embedding: qvec, minSimilarity: config().embeddings.minSimilarity } : null;
+  const score = (ids?: string[]) => (keywords.length ? scoreTurns(keywords, ids, vector) : Promise.resolve(new Map<string, number>()));
   const history_span = span ? { first: span.first, last: span.last } : undefined;
 
   let chosen: TurnRow[] = [];
@@ -63,12 +73,14 @@ export function recall(p: Plan, resolutions: Resolution[], conversationId: strin
 
   if (resolutions.length) {
     for (const r of resolutions) {
-      const perCandidate = r.candidates.map((range) => {
-        const turns = turnsInRange(range.start, range.end, exclude);
-        const scores = keywords.length ? scoreTurns(keywords, turns.map((t) => t.assistant_id)) : new Map<string, number>();
-        const matched = turns.filter((t) => (scores.get(t.assistant_id) ?? 0) > 0).sort((a, b) => scores.get(b.assistant_id)! - scores.get(a.assistant_id)!);
-        return { range, turns, matched };
-      });
+      const perCandidate = await Promise.all(
+        r.candidates.map(async (range) => {
+          const turns = await turnsInRange(range.start, range.end, exclude);
+          const scores = turns.length ? await score(turns.map((t) => t.assistant_id)) : new Map<string, number>();
+          const matched = turns.filter((t) => (scores.get(t.assistant_id) ?? 0) > 0).sort((a, b) => scores.get(b.assistant_id)! - scores.get(a.assistant_id)!);
+          return { range, turns, matched };
+        }),
+      );
       const withMatches = perCandidate.filter((c) => c.matched.length);
       if (withMatches.length > 1) {
         status = "ambiguous";
@@ -82,8 +94,8 @@ export function recall(p: Plan, resolutions: Resolution[], conversationId: strin
         // No keyword match on the candidate days: widen by a day once.
         const first = r.candidates[0]!;
         const wide = { start: addDays(first.start, -1), end: addDays(first.end, 1) };
-        const wideTurns = turnsInRange(wide.start, wide.end, exclude);
-        const wideScores = keywords.length ? scoreTurns(keywords, wideTurns.map((t) => t.assistant_id)) : new Map<string, number>();
+        const wideTurns = await turnsInRange(wide.start, wide.end, exclude);
+        const wideScores = wideTurns.length ? await score(wideTurns.map((t) => t.assistant_id)) : new Map<string, number>();
         const wideMatched = wideTurns.filter((t) => (wideScores.get(t.assistant_id) ?? 0) > 0);
         const anyOnDay = perCandidate.find((c) => c.turns.length);
         if (wideMatched.length) {
@@ -97,10 +109,10 @@ export function recall(p: Plan, resolutions: Resolution[], conversationId: strin
       }
     }
   } else if (keywords.length) {
-    const scores = scoreTurns(keywords);
+    const scores = await score();
     for (const id of exclude) scores.delete(id);
     const ids = [...scores.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([id]) => id);
-    chosen = turnsByIds(ids);
+    chosen = await turnsByIds(ids);
   }
 
   // De-duplicate, then order chronologically (reads naturally, and stable refs).
@@ -110,7 +122,7 @@ export function recall(p: Plan, resolutions: Resolution[], conversationId: strin
 
   if (!chosen.length) {
     const target = resolutions[0]?.candidates[0]?.start;
-    const near = target ? nearestTurns(target, 3, exclude) : [];
+    const near = target ? await nearestTurns(target, 3, exclude) : [];
     return {
       status: "none",
       resolved,
@@ -121,13 +133,13 @@ export function recall(p: Plan, resolutions: Resolution[], conversationId: strin
     };
   }
 
-  const turns = buildTurns(chosen);
+  const turns = await buildTurns(chosen);
   return { status, resolved, turns: fitBudget(turns), history_span, note };
 }
 
-function buildTurns(rows: TurnRow[]): RecalledTurn[] {
-  const claims = claimsFor(rows.map((r) => r.assistant_id));
-  const evidence = new Map(evidenceByIds(claims.filter((c) => c.evidence_id && PRICE_ATTR.test(c.attribute)).map((c) => c.evidence_id!)).map((e) => [e.id, e]));
+async function buildTurns(rows: TurnRow[]): Promise<RecalledTurn[]> {
+  const claims = await claimsFor(rows.map((r) => r.assistant_id));
+  const evidence = new Map((await evidenceByIds(claims.filter((c) => c.evidence_id && PRICE_ATTR.test(c.attribute)).map((c) => c.evidence_id!))).map((e) => [e.id, e]));
   return rows.map((r, i) => ({
     ref: `M${i + 1}`,
     assistant_id: r.assistant_id,

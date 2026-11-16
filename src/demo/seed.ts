@@ -4,8 +4,7 @@
  * not real records; the live agent re-checks everything against the web.
  */
 import { now } from "../clock";
-import { db } from "../db/index";
-import { deleteConversation } from "../db/repo";
+import { deleteConversation, listConversations } from "../db/repo";
 import { addDays, localDate, weekday } from "../time/local";
 import { importConversations, type ImportPayload } from "../memory/import";
 
@@ -130,10 +129,8 @@ As of ${tuesday}.`,
   };
 }
 
-/** Remove previous demo conversations, then import fresh ones dated relative to now(). */
-export function seedDemo(tz: string): { conversations: number; messages: number } {
-  const conn = db();
-  const ids = (conn.prepare("SELECT id FROM conversations WHERE title LIKE '[demo]%'").all() as Array<{ id: string }>).map((r) => r.id);
-  for (const id of ids) deleteConversation(id);
+/** For the current user: remove previous demo conversations, then import fresh ones dated relative to now(). */
+export async function seedDemo(tz: string): Promise<{ conversations: number; messages: number }> {
+  for (const c of await listConversations()) if (c.title?.startsWith("[demo]")) await deleteConversation(c.id);
   return importConversations(demoPayload(tz));
 }

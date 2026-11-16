@@ -4,36 +4,53 @@
  * Writes eval-results.md.
  */
 import "dotenv/config";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { writeFileSync } from "node:fs";
 import { z } from "zod";
+import { dropDatabase, ensureDatabase, migrate, withDatabase } from "../src/db/migrate";
 
 process.env.MINICHAT_FAKE_NOW ||= "2026-11-11T14:05:00+05:30"; // a Wednesday
-process.env.MINICHAT_DB_PATH = join(mkdtempSync(join(tmpdir(), "minichat-eval-")), "eval.db");
 const TZ = process.env.EVAL_TZ || "Asia/Kolkata";
+
+// A throwaway database (same server) and Redis key prefix, so the eval never touches real data or caches.
+const evalDb = `minichat_eval_${Date.now()}`;
+const adminUrl = withDatabase(process.env.MIGRATE_DATABASE_URL || "postgres://postgres:postgres@localhost:5433/minichat", evalDb);
+process.env.DATABASE_URL = withDatabase(process.env.DATABASE_URL || "postgres://minichat_app:minichat_app@localhost:5433/minichat", evalDb);
+process.env.REDIS_PREFIX = `eval:${Date.now()}:`;
+process.env.DAILY_TOKEN_BUDGET = "0";
+await ensureDatabase(adminUrl);
+await migrate({ adminUrl, appUrl: process.env.DATABASE_URL });
+const EVAL_USER = "dev|eval";
 
 const { missingConfig } = await import("../src/config");
 const { seedDemo } = await import("../src/demo/seed");
 const { drainAll } = await import("../src/memory/jobs");
 const { runTurn } = await import("../src/agent/turn");
-const { db } = await import("../src/db/index");
+const { asUser, closePool } = await import("../src/db/index");
+const { searchCallsFor } = await import("../src/db/repo");
+const { ensureUser } = await import("../src/auth");
+const { closeRedis } = await import("../src/redis");
 const { structured } = await import("../src/llm/client");
+
+async function cleanup(): Promise<void> {
+  await closeRedis();
+  await closePool();
+  if (!process.env.EVAL_KEEP_DB) await dropDatabase(adminUrl).catch(() => {});
+}
 type ChatEvent = import("../src/sse").ChatEvent;
 
 const problems = missingConfig();
 if (problems.length) {
   console.error(`Cannot run eval: ${problems.join(" ")}`);
+  await cleanup();
   process.exit(1);
 }
 
-type Run = { text: string; events: ChatEvent[]; assistantId: string; ttft: number; total: number };
+type Run = { text: string; events: ChatEvent[]; assistantId: string; ttft: number; total: number; searches: Array<{ query: string; since_date: string | null; domains: string | null }> };
 type Check = { name: string; pass: boolean; detail?: string };
 type Scenario = { id: string; question: string; checks: (r: Run) => Check[] };
 
 const memory = (r: Run) => r.events.find((e) => e.type === "memory") as Extract<ChatEvent, { type: "memory" }> | undefined;
-const searchCalls = (r: Run) =>
-  db().prepare("SELECT query, since_date, domains FROM search_calls WHERE assistant_message_id = ?").all(r.assistantId) as Array<{ query: string; since_date: string | null; domains: string | null }>;
+const searchCalls = (r: Run) => r.searches;
 const cites = (r: Run, prefix: "S" | "M") => new RegExp(`\\[${prefix}\\d+`).test(r.text);
 const recalledDates = (r: Run) => memory(r)?.recalled.map((x) => x.local_date) ?? [];
 const check = (name: string, pass: boolean, detail?: string): Check => ({ name, pass, detail });
@@ -105,19 +122,24 @@ async function ask(question: string): Promise<Run> {
   let text = "";
   const t0 = Date.now();
   let ttft = -1;
-  await runTurn({ text: question, tz: TZ }, (e) => {
-    events.push(e);
-    if (e.type === "text") {
-      if (ttft < 0) ttft = Date.now() - t0;
-      text += e.delta;
-    }
-  });
+  await asUser(EVAL_USER, () =>
+    runTurn({ text: question, tz: TZ }, (e) => {
+      events.push(e);
+      if (e.type === "text") {
+        if (ttft < 0) ttft = Date.now() - t0;
+        text += e.delta;
+      }
+    }),
+  );
+  const total = Date.now() - t0;
   const start = events.find((e) => e.type === "start") as Extract<ChatEvent, { type: "start" }>;
-  return { text, events, assistantId: start.assistantMessageId, ttft, total: Date.now() - t0 };
+  const searches = await asUser(EVAL_USER, () => searchCallsFor(start.assistantMessageId));
+  return { text, events, assistantId: start.assistantMessageId, ttft, total, searches };
 }
 
 console.log(`Seeding demo history (now = ${process.env.MINICHAT_FAKE_NOW}, tz = ${TZ})…`);
-seedDemo(TZ);
+await ensureUser({ id: EVAL_USER, name: "eval" }, "dev", "eval");
+await asUser(EVAL_USER, () => seedDemo(TZ));
 await drainAll(300_000);
 
 const rows: string[] = [];
@@ -168,4 +190,5 @@ ${rows.join("\n")}
 ${details.join("\n")}`;
 writeFileSync("eval-results.md", report);
 console.log(`\n${passed}/${total} checks passed. Wrote eval-results.md`);
+await cleanup();
 process.exit(0);

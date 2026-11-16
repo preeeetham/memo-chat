@@ -3,8 +3,11 @@
  * time expressions, keywords and entities. It never blocks the turn: on timeout or error we use
  * a regex fallback, and time expressions are always backstopped by the deterministic finder.
  */
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { config } from "../config";
+import { maybeUserId } from "../db/index";
+import { cacheGet, cacheSet, userKey } from "../redis";
 import { structured } from "../llm/client";
 import { findTimeExpressions } from "../time/resolve";
 
@@ -55,6 +58,13 @@ export async function plan(text: string, recent: string[], nowLine: string): Pro
   if (isFastPath(text)) {
     return { task: "chat", needs_memory: false, time_expressions: [], topic_keywords: [], entities: [], needs_web: false, source: "fast_path" };
   }
+  // Same message with the same recent context: reuse the plan (per user, 10 minutes).
+  const uid = maybeUserId();
+  const cacheKey = uid ? userKey(uid, "plan", createHash("sha256").update(JSON.stringify([text, recent])).digest("hex").slice(0, 32)) : null;
+  if (cacheKey) {
+    const hit = await cacheGet<Plan>(cacheKey);
+    if (hit) return hit;
+  }
   try {
     const p = await structured(
       Plan,
@@ -71,7 +81,9 @@ export async function plan(text: string, recent: string[], nowLine: string): Pro
     // Deterministic backstop: never lose a time expression the model missed.
     const extra = findTimeExpressions(text).filter((t) => !p.time_expressions.some((e) => e.toLowerCase().includes(t)));
     const time_expressions = [...p.time_expressions, ...extra];
-    return { ...p, time_expressions, needs_memory: p.needs_memory || (extra.length > 0 && MEMORY_HINT.test(text)), source: "model" };
+    const out: Plan = { ...p, time_expressions, needs_memory: p.needs_memory || (extra.length > 0 && MEMORY_HINT.test(text)), source: "model" };
+    if (cacheKey) await cacheSet(cacheKey, out, 600);
+    return out;
   } catch {
     return fallbackPlan(text);
   }
