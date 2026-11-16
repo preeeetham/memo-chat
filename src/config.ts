@@ -30,7 +30,11 @@ export type Config = {
   };
 };
 
-const env = (k: string) => (process.env[k] ?? "").trim();
+/** An env value; a value that is only a comment ("KEY=   # note" read literally by docker compose) counts as empty. */
+const env = (k: string) => {
+  const v = (process.env[k] ?? "").trim();
+  return v.startsWith("#") ? "" : v;
+};
 const num = (k: string, d: number) => {
   const v = Number(env(k));
   return env(k) !== "" && Number.isFinite(v) ? v : d;
