@@ -104,8 +104,15 @@ export async function drainAll(timeoutMs = 120_000): Promise<void> {
  * The worker loop: block on the Redis stream for new job ids, and sweep Postgres every few seconds.
  * Several workers can run side by side (docker compose up --scale worker=3).
  */
-export async function runWorker(opts: { signal: AbortSignal; sweepMs?: number }): Promise<void> {
-  const consumer = `${hostname()}-${process.pid}`;
+export async function runWorker(opts: { signal: AbortSignal; sweepMs?: number; concurrency?: number }): Promise<void> {
+  // Extraction is I/O-bound (an LLM call), so one process runs several consumers side by side.
+  const n = Math.max(1, opts.concurrency ?? Number(process.env.WORKER_CONCURRENCY || 8));
+  console.log(`[worker] starting ${n} consumer(s)`);
+  await Promise.all(Array.from({ length: n }, (_, i) => consume(i, opts)));
+}
+
+async function consume(index: number, opts: { signal: AbortSignal; sweepMs?: number }): Promise<void> {
+  const consumer = `${hostname()}-${process.pid}-${index}`;
   const r = blockingRedis();
   r.on("error", () => {});
   const ensureGroup = () =>
@@ -115,10 +122,10 @@ export async function runWorker(opts: { signal: AbortSignal; sweepMs?: number })
   await ensureGroup();
   let lastSweep = 0;
   const sweepMs = opts.sweepMs ?? 5000;
-  console.log(`[worker] ${consumer} listening on ${STREAM()}`);
+  if (index === 0) console.log(`[worker] listening on ${STREAM()}`);
   while (!opts.signal.aborted) {
     try {
-      const res = (await r.xreadgroup("GROUP", GROUP, consumer, "COUNT", 10, "BLOCK", 2000, "STREAMS", STREAM(), ">")) as
+      const res = (await r.xreadgroup("GROUP", GROUP, consumer, "COUNT", 1, "BLOCK", 2000, "STREAMS", STREAM(), ">")) as
         | Array<[string, Array<[string, string[]]>]>
         | null;
       for (const [, entries] of res ?? []) {

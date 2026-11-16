@@ -101,6 +101,18 @@ The defaults in `src/config.ts` point at the compose ports (Postgres 5433, Redis
 
 On a free-tier Gemini key (15 requests/minute) the eval pauses between scenarios; set `EVAL_PAUSE_MS=0` on a paid key.
 
+## Load test
+
+[Locust](https://locust.io) drives many simulated users through a load balancer in front of three app replicas. Each user signs in, imports their own backdated history (a CRM shortlist on Monday 9 Nov, Postgres hosting on Tuesday 10 Nov, a Node.js question on 3 Nov, each tagged with a secret per-user token), and then keeps asking the memory questions: "On Monday we shortlisted 5 CRM tools…", "Last Tuesday I asked you about Postgres hosting…", "What did I ask you on 3 November?", "What did I ask you on 20 October?". Every response is checked: the turn finished, recall picked the right date and this user's own turn, and no other user's token appears anywhere in the recall, the answer or the conversation list.
+
+```bash
+LT_USERS=300 LT_SPAWN_RATE=30 LT_DURATION=3m bash loadtest/run.sh
+```
+
+The LLM and web search are mocked (`loadtest/mock-llm.ts`, `SEARCH_PROVIDER=mock`) so the run costs nothing and stays clear of provider rate limits; the mock adds about 0.4 s per model round so latencies look like streaming. The clock is frozen at Wednesday 11 Nov 2026 so each date has one right answer. Results go to `loadtest/results/` (`correctness.json`, an HTML report, CSVs). The script also reports how long the worker takes to drain the extraction backlog afterwards.
+
+Last run on a laptop (Docker Desktop, 3 app replicas, 2 workers × 16 consumers): 300 users, 14,806 chat turns at ~95 requests/s, **0 failures, 0 cross-user leaks**, every recall on the right date. p95: 0.66 s for "no record", 1.2–2.0 s for recall + web verification (mostly the mock's simulated model time). Backlog drained 31 s after the run.
+
 ## Layout
 
 ```
@@ -118,4 +130,5 @@ src/redis.ts, budget.ts, stream.ts   Redis client, per-user limits, resumable SS
 src/worker/main.ts        the worker process
 db/migrations/            schema, indexes, row-level security policies
 scripts/                  migrate, seed, eval, smoke
+loadtest/                 Locust load test, mock LLM, nginx load balancer, compose overlay
 ```
