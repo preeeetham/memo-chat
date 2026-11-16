@@ -32,21 +32,65 @@ export default function Login() {
 
   return (
     <div className="login">
-      <div className="card">
-        <h1>Mini Chat</h1>
-        <p>A chat agent that remembers your past conversations and checks the live web. Your history is private to your account.</p>
-        {mode === "oidc" && <a className="primary" href="/api/auth/login">Continue to sign in</a>}
-        {mode === "dev" && (
-          <form onSubmit={devLogin} style={{ display: "grid", gap: 10 }}>
-            <input autoFocus value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Username, e.g. demo" aria-label="Username" />
-            <button type="submit" disabled={busy || !username.trim()}>Sign in</button>
-            <span className="hint">
-              Development sign-in: no password, any username. Use <strong>demo</strong> to see the preloaded demo history. Set AUTH_MODE=oidc to use a real identity provider.
-            </span>
-          </form>
-        )}
-        {error && <div className="error">{error}</div>}
-      </div>
+      <nav className="login-nav">
+        <span className="brand"><span className="brand-mark" aria-hidden />Mini Chat</span>
+      </nav>
+      <main className="login-main">
+        <section>
+          <h1>
+            Answers that <span className="accent">remember</span> what you asked
+          </h1>
+          <p className="lede">
+            Mini Chat recalls your past conversations by date, rechecks the live web, and tells you what changed since. Your history is private to your account.
+          </p>
+
+          {mode === "oidc" && (
+            <a className="btn btn-ink btn-lg" href="/api/auth/login">Continue to sign in</a>
+          )}
+          {mode === "dev" && (
+            <form onSubmit={devLogin}>
+              <input autoFocus value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Username, e.g. demo" aria-label="Username" autoComplete="username" />
+              <button type="submit" className="btn btn-ink btn-lg" disabled={busy || !username.trim()}>
+                {busy ? "Signing in…" : "Sign in"}
+              </button>
+              <div className="hint">
+                Development sign-in: no password, any username. Use <strong>demo</strong> to see the preloaded history. Set <code>AUTH_MODE=oidc</code> for a real identity provider.
+              </div>
+            </form>
+          )}
+          {error && <div className="error">{error}</div>}
+
+          <div className="login-points">
+            <div><b>1.</b>“Last Tuesday” becomes a real date, in your timezone.</div>
+            <div><b>2.</b>The matching conversation is recalled, with what was said then.</div>
+            <div><b>3.</b>Each claim is rechecked live: changed, still correct, or unverified.</div>
+          </div>
+        </section>
+
+        <section className="preview" aria-label="Example of a recalled answer">
+          <div className="bubble">Last Tuesday I asked about Postgres hosting. Has pricing changed since?</div>
+          <div className="panel">
+            <div className="line">
+              <span className="ctx-label"><i className="i-date" />Read as</span>
+              <span className="resolved"><q>Last Tuesday</q><span className="arrow">→</span><strong>Tue 10 Nov</strong></span>
+            </div>
+            <div className="line">
+              <span className="ctx-label"><i className="i-mem" />Recalled</span>
+              <span><span className="recall" style={{ cursor: "default" }}><span className="ref">M1</span><span className="t">Postgres hosting prices</span></span></span>
+            </div>
+            <div className="line">
+              <span className="ctx-label"><i className="i-web" />Rechecked</span>
+              <span className="muted">Live today · 7 sources</span>
+            </div>
+          </div>
+          <div className="panel rows">
+            <div><span>Neon Launch</span><span className="verdict changed">Changed</span></div>
+            <div><span>Supabase Pro</span><span className="verdict same">Still correct</span></div>
+            <div><span>AWS RDS t4g.micro</span><span className="verdict same">Still correct</span></div>
+          </div>
+          <div className="caption">Illustration of a real answer</div>
+        </section>
+      </main>
     </div>
   );
 }

@@ -61,12 +61,58 @@ async function readEvents(body: ReadableStream<Uint8Array>, onEvent: (seq: numbe
 }
 
 const SUGGESTIONS = [
-  "On Monday we shortlisted 5 CRM tools for a 20-person sales team. Has any of them changed pricing or shipped something big since?",
-  "What did I ask you on 3 November? Is your answer still correct today?",
-  "Last Tuesday I asked you about Postgres hosting. Has any pricing changed since then?",
+  { kind: "Recall and recheck", q: "On Monday we shortlisted 5 CRM tools for a 20-person sales team. Has any of them changed pricing or shipped something big since?" },
+  { kind: "Find by date", q: "What did I ask you on 3 November? Is your answer still correct today?" },
+  { kind: "What changed since", q: "Last Tuesday I asked you about Postgres hosting. Has any pricing changed since then?" },
 ];
 
 const tz = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+
+/** "2026-11-10" -> "Tue 10 Nov" (adds the year when it isn't this year). */
+function fmtDate(d: string, today: string): string {
+  const x = new Date(`${d}T00:00:00Z`);
+  if (Number.isNaN(x.getTime())) return d;
+  const sameYear = d.slice(0, 4) === today.slice(0, 4);
+  return x.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", ...(sameYear ? {} : { year: "numeric" }), timeZone: "UTC" });
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+/** The answer labels each rechecked claim "Changed", "Still correct" or "Couldn't verify" (see src/agent/prompt.ts). */
+type Verdict = "changed" | "same" | "unknown";
+const VERDICT_RE = /^(changed|still correct|unchanged|couldn['’]?t verify|could not verify|not verified|unverified)\b/i;
+function verdictOf(label: string): Verdict | null {
+  const m = label.trim().match(VERDICT_RE);
+  if (!m) return null;
+  const w = (m[1] ?? "").toLowerCase();
+  if (w === "changed") return "changed";
+  if (w === "still correct" || w === "unchanged") return "same";
+  return "unknown";
+}
+function tallyVerdicts(text: string): Record<Verdict, number> {
+  const t: Record<Verdict, number> = { changed: 0, same: 0, unknown: 0 };
+  for (const m of text.matchAll(/\*\*([^*]+)\*\*/g)) {
+    const v = verdictOf(m[1] ?? "");
+    if (v) t[v]++;
+  }
+  return t;
+}
+function plainText(node: React.ReactNode): string {
+  if (node == null || typeof node === "boolean") return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(plainText).join("");
+  if (typeof node === "object" && "props" in node) return plainText((node.props as { children?: React.ReactNode }).children);
+  return "";
+}
+function citedRefs(text: string): Set<string> {
+  return new Set([...text.matchAll(/\b([SM]\d+)\b/g)].map((m) => m[1] ?? ""));
+}
 
 function dayLabel(d: string | null, today: string): string {
   if (!d) return "Earlier";
@@ -275,26 +321,133 @@ export default function Page() {
     if (href?.startsWith("#conv:")) {
       const id = href.slice(6);
       return (
-        <a href={href} className="cite" onClick={(e) => (e.preventDefault(), void openConv(id))}>
+        <a href={href} className="cite mem" title="Open the recalled conversation" onClick={(e) => (e.preventDefault(), void openConv(id))}>
           {children}
         </a>
       );
     }
     return (
-      <a href={href} target="_blank" rel="noreferrer" className={title === "cite" ? "cite" : undefined}>
+      <a href={href} target="_blank" rel="noreferrer" className={title === "cite" ? "cite" : undefined} title={title === "cite" ? hostOf(href ?? "") : title}>
         {children}
       </a>
     );
   };
+  const MdStrong = ({ children }: { children?: React.ReactNode }) => {
+    const v = verdictOf(plainText(children));
+    return v ? <span className={`verdict ${v}`}>{children}</span> : <strong>{children}</strong>;
+  };
+  const mdComponents = { a: MdLink, strong: MdStrong };
+
+  const SourceCard = ({ s }: { s: Source }) => (
+    <a className="source" href={s.url} target="_blank" rel="noreferrer" title={s.url}>
+      <span className="top"><span className="ref">{s.ref}</span><span className="host">{hostOf(s.url)}</span></span>
+      <span className="title">{s.title && s.title !== s.url ? s.title : s.url.replace(/^https?:\/\/(www\.)?/, "")}</span>
+      <span className="dates">
+        {s.publishedAt ? `Published ${s.publishedAt} · ` : ""}Retrieved {s.retrievedAt}
+      </span>
+    </a>
+  );
+
+  function renderContext(m: Msg) {
+    const mem = m.memory && m.memory.status !== "not_needed" ? m.memory : null;
+    const tally = m.text ? tallyVerdicts(m.text) : { changed: 0, same: 0, unknown: 0 };
+    const checked = tally.changed + tally.same + tally.unknown;
+    const since = mem?.recalled[0]?.local_date ?? mem?.resolved[0]?.date;
+    if (!mem && !checked) return null;
+    return (
+      <div className="context">
+        {mem && mem.resolved.length > 0 && (
+          <div className="ctx-row">
+            <span className="ctx-label"><i className="i-date" />Read as</span>
+            <span className="ctx-body">
+              {mem.resolved.map((r) => (
+                <span key={r.expr} className="resolved" title={r.date}>
+                  <q>{r.expr}</q><span className="arrow">→</span><strong>{fmtDate(r.date, today)}</strong>
+                </span>
+              ))}
+            </span>
+          </div>
+        )}
+        {mem && (
+          <div className="ctx-row">
+            <span className="ctx-label"><i className="i-mem" />Recalled</span>
+            <span className="ctx-body">
+              {mem.status === "none" || mem.recalled.length === 0 ? (
+                <span className="muted">No matching past conversation</span>
+              ) : (
+                mem.recalled.map((r) => (
+                  <button key={r.ref} className="recall" title={`Open: ${r.conversation_title ?? ""}`} onClick={() => void openConv(r.conversation_id)}>
+                    <span className="ref">{r.ref}</span>
+                    <span className="t">{r.conversation_title ?? "Untitled"}</span>
+                    <span className="d">{fmtDate(r.local_date, today)}</span>
+                  </button>
+                ))
+              )}
+            </span>
+          </div>
+        )}
+        {(checked > 0 || (mem && m.sources.length > 0)) && (
+          <div className="ctx-row">
+            <span className="ctx-label"><i className="i-web" />{since ? "Since" : "Rechecked"}</span>
+            <span className="ctx-body">
+              {since && <span>{fmtDate(since, today)} → today</span>}
+              {checked > 0 ? (
+                <span className="tally">
+                  {tally.changed > 0 && <span className="verdict changed">{tally.changed} changed</span>}
+                  {tally.same > 0 && <span className="verdict same">{tally.same} still correct</span>}
+                  {tally.unknown > 0 && <span className="verdict unknown">{tally.unknown} couldn&apos;t verify</span>}
+                </span>
+              ) : (
+                <span className="muted">Rechecked live</span>
+              )}
+              {m.sources.length > 0 && <span className="muted">{m.sources.length} sources</span>}
+            </span>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function renderSources(m: Msg) {
+    if (m.sources.length === 0) return null;
+    const cited = citedRefs(m.text);
+    const used = m.sources.filter((s) => cited.has(s.ref));
+    const rest = m.sources.filter((s) => !cited.has(s.ref));
+    const primary = used.length ? used : rest.slice(0, 4);
+    const extra = used.length ? rest : rest.slice(4);
+    return (
+      <div className="sources">
+        <div className="sources-head">
+          <strong>{used.length ? "Cited sources" : "Sources"}</strong>
+          <span className="muted">{used.length ? `${used.length} of ${m.sources.length} read this turn` : `${m.sources.length} read this turn`}</span>
+        </div>
+        <div className="source-grid">
+          {primary.map((s) => <SourceCard key={s.ref} s={s} />)}
+        </div>
+        {extra.length > 0 && (
+          <details className="more-sources">
+            <summary>{extra.length} more consulted</summary>
+            <div className="source-grid">
+              {extra.map((s) => <SourceCard key={s.ref} s={s} />)}
+            </div>
+          </details>
+        )}
+      </div>
+    );
+  }
+
+  const budgetPct = settings && settings.budget.dailyTokens > 0 ? Math.min(100, Math.round((settings.budget.usedToday / settings.budget.dailyTokens) * 100)) : null;
+  const userName = settings ? settings.user.name ?? settings.user.id : "";
 
   return (
     <div className="app">
       <aside className={`sidebar${sidebarOpen ? " open" : ""}`}>
         <header>
-          <span className="brand">Mini Chat</span>
-          <button className="new-btn" onClick={newChat}>New chat</button>
+          <span className="brand"><span className="brand-mark" aria-hidden />Mini Chat</span>
+          <button className="btn btn-ink" onClick={newChat}>New chat</button>
         </header>
         <nav className="conv-list">
+          {convs.length === 0 && <div className="conv-empty">No conversations yet.</div>}
           {groups.map((g) => (
             <div key={g.label}>
               <div className="group-label">{g.label}</div>
@@ -312,19 +465,22 @@ export default function Page() {
         <footer>
           {settings && (
             <div className="who">
-              Signed in as <strong>{settings.user.name ?? settings.user.id}</strong> · <button onClick={() => void signOut()}>sign out</button>
-              {settings.budget.dailyTokens > 0 && (
-                <div title="Your daily token budget">
-                  {Math.min(100, Math.round((settings.budget.usedToday / settings.budget.dailyTokens) * 100))}% of today&apos;s budget used
-                </div>
-              )}
+              <span className="avatar" aria-hidden>{userName.replace(/^.*\|/, "").slice(0, 1)}</span>
+              <span className="name">{userName}</span>
+              <button className="link-btn" onClick={() => void signOut()}>Sign out</button>
             </div>
           )}
-          <div>
+          {budgetPct !== null && (
+            <div className="budget" title="Your daily token budget">
+              <div className={`budget-bar${budgetPct >= 80 ? " high" : ""}`}><span style={{ width: `${budgetPct}%` }} /></div>
+              <span>{budgetPct}% of today&apos;s budget used</span>
+            </div>
+          )}
+          <div className="engine">
             {settings ? `${settings.model} · search: ${settings.searchProvider}` : "…"}
             {settings?.demoTools && (
               <>
-                {" "}· <button onClick={() => setShowSettings((s) => !s)}>{showSettings ? "hide demo tools" : "demo tools"}</button>
+                {" "}· <button className="link-btn" onClick={() => setShowSettings((s) => !s)}>{showSettings ? "hide demo tools" : "demo tools"}</button>
               </>
             )}
           </div>
@@ -332,15 +488,15 @@ export default function Page() {
             <div className="settings">
               <span className="demo-tag">Demo / testing only. The clock is shared by everyone on this server.</span>
               <div className="row">
-                <button onClick={() => void loadDemo()}>Load demo history</button>
+                <button className="btn btn-line" onClick={() => void loadDemo()}>Load demo history</button>
               </div>
               <label>
                 Fake clock (ISO time, empty = real time)
                 <input value={fakeNowInput} placeholder="2026-11-11T14:05:00+05:30" onChange={(e) => setFakeNowInput(e.target.value)} />
               </label>
               <div className="row">
-                <button onClick={() => void applyFakeNow(fakeNowInput || null)}>Set clock</button>
-                <button onClick={() => void applyFakeNow(null)}>Real time</button>
+                <button className="btn btn-ink" onClick={() => void applyFakeNow(fakeNowInput || null)}>Set clock</button>
+                <button className="btn btn-line" onClick={() => void applyFakeNow(null)}>Real time</button>
               </div>
               {settings?.fakeNow && <span className="demo-tag">Clock frozen at {settings.fakeNow}</span>}
             </div>
@@ -354,17 +510,29 @@ export default function Page() {
             Setup needed: {settings.problems.join(" ")} Copy <code>.env.example</code> to <code>.env</code>, fill it in, and restart (<code>docker compose up</code> or <code>npm run dev</code>).
           </div>
         )}
-        <button className="menu-btn" onClick={() => setSidebarOpen((s) => !s)}>☰ Conversations</button>
-        <div className="messages" ref={scrollRef}>
+        <div className="topbar">
+          <button className="btn btn-line" onClick={() => setSidebarOpen((s) => !s)} aria-label="Show conversations">☰ Chats</button>
+          <span className="brand"><span className="brand-mark" aria-hidden />Mini Chat</span>
+          <button className="btn btn-ink" onClick={newChat}>New</button>
+        </div>
+        <div className="messages" ref={scrollRef} onClick={() => sidebarOpen && setSidebarOpen(false)}>
           {messages.length === 0 ? (
             <div className="empty">
-              <h1>What should we look into?</h1>
-              <div>I remember our past conversations and check the live web. Try one of these (load the demo history first for the recall ones):</div>
+              <h1>
+                What should we <span className="accent">look into</span>?
+              </h1>
+              <p className="lede">I remember our past conversations by date, check the live web, and tell you what changed since.</p>
+              <div className="section-label">Try asking</div>
               <div className="suggestions">
-                {SUGGESTIONS.map((s) => (
-                  <button key={s} onClick={() => void send(s)} disabled={busy}>{s}</button>
+                {SUGGESTIONS.map((s, i) => (
+                  <button key={s.q} className="suggestion" onClick={() => void send(s.q)} disabled={busy}>
+                    <span className="num">{i + 1}.</span>
+                    <span className="kind">{s.kind}</span>
+                    <span className="q">{s.q}</span>
+                  </button>
                 ))}
               </div>
+              <div className="note">The recall examples need history: load the demo history from demo tools, or sign in as demo.</div>
             </div>
           ) : (
             <div className="thread">
@@ -374,46 +542,20 @@ export default function Page() {
                     m.text
                   ) : (
                     <>
+                      {renderContext(m)}
+                      {busy && idx === messages.length - 1 && status && (
+                        <div className="status"><span className="dot" />{status}</div>
+                      )}
                       {m.text && (
                         <div className="md">
-                          <ReactMarkdown remarkPlugins={[[remarkGfm, { singleTilde: false }]]} components={{ a: MdLink }}>
+                          <ReactMarkdown remarkPlugins={[[remarkGfm, { singleTilde: false }]]} components={mdComponents}>
                             {linkCitations(m.text, m)}
                           </ReactMarkdown>
                         </div>
                       )}
-                      {busy && idx === messages.length - 1 && status && (
-                        <div className="status"><span className="dot" />{status}</div>
-                      )}
                       {m.error && <div className="error">{m.error}</div>}
-                      {m.degraded && <div className="meta"><span className="chip" title="The main model was unavailable">answered by fallback model {m.degraded}</span></div>}
-                      {m.memory && m.memory.status !== "not_needed" && (
-                        <div className="meta">
-                          {m.memory.resolved.map((r) => (
-                            <span key={r.expr} className="chip" title="How I read the date">{r.expr} → {r.date}</span>
-                          ))}
-                          {m.memory.status === "none" && <span className="chip">No matching past conversation</span>}
-                          {m.memory.recalled.map((r) => (
-                            <button key={r.ref} className="chip" title={r.conversation_title ?? ""} onClick={() => void openConv(r.conversation_id)}>
-                              {r.ref} · {dayLabel(r.local_date, today)} · {(r.conversation_title ?? "").slice(0, 40)}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      {m.sources.length > 0 && (
-                        <details className="sources" open={m.sources.length <= 6}>
-                          <summary>{m.sources.length} sources</summary>
-                          {m.sources.map((s) => (
-                            <div key={s.ref} className="source">
-                              <span className="ref">{s.ref}</span>
-                              <a href={s.url} target="_blank" rel="noreferrer" title={s.url}>{s.title}</a>
-                              <span className="dates">
-                                {(() => { try { return new URL(s.url).host.replace(/^www\./, ""); } catch { return ""; } })()}
-                                {s.publishedAt ? ` · published ${s.publishedAt}` : ""} · retrieved {s.retrievedAt}
-                              </span>
-                            </div>
-                          ))}
-                        </details>
-                      )}
+                      {m.degraded && <div className="fallback" title="The main model was unavailable">Answered by fallback model {m.degraded}</div>}
+                      {renderSources(m)}
                     </>
                   )}
                 </div>
@@ -432,6 +574,7 @@ export default function Page() {
               value={input}
               rows={1}
               placeholder="Ask anything…"
+              aria-label="Message"
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
@@ -441,12 +584,12 @@ export default function Page() {
               }}
             />
             {busy ? (
-              <button type="button" onClick={stopTurn}>Stop</button>
+              <button type="button" className="btn btn-line" onClick={stopTurn}>Stop</button>
             ) : (
-              <button type="submit" disabled={!input.trim()}>Send</button>
+              <button type="submit" className="btn btn-ink" disabled={!input.trim()}>Send</button>
             )}
           </form>
-          <div className="hint">Times are read in your timezone ({userTz}). Enter to send, Shift+Enter for a new line.</div>
+          <div className="hint">Dates are read in your timezone ({userTz}). Enter to send, Shift+Enter for a new line.</div>
         </div>
       </main>
     </div>
