@@ -1,6 +1,6 @@
 # Memo Chat: project journey
 
-How Memo Chat went from a challenge brief to a multi-user, Docker-packaged chat agent: the research we started from, each decision and the reason for it, where the build stands today, and what comes next.
+How Memo Chat (first called Mini Chat) went from a challenge brief to a multi-user chat agent, packaged with Docker and running live at **https://memo-chat.up.railway.app**: the research we started from, each decision and the reason for it, where the build stands today, and what comes next.
 
 `DESIGN.md` is the one-page design the challenge asks for. This file is the longer story behind it.
 
@@ -181,7 +181,7 @@ These directly shaped later work: the paraphrase gap is why vector search came b
 
 ### 3.3 Published (16 Nov)
 
-Pushed to the public repo **github.com/preeeetham/memo-chat** after a full history scan: `.env`, the database and build output were never committed, and no keys were found.
+Pushed to the public repo **github.com/preeeetham/mini-chat** (to be renamed `memo-chat`, see 3.9) after a full history scan: `.env`, the database and build output were never committed, and no keys were found.
 
 ### 3.4 Designing for many users (16 Nov)
 
@@ -245,27 +245,87 @@ Restyled in the spirit of projectminimi.com (white canvas, Roboto, black buttons
 
 Before and after screenshots are in the project files.
 
+### 3.8 Deployed on Railway (17 Nov)
+
+**Decision:** host on Railway, not Vercel or Netlify. Those platforms run serverless functions and static pages. Memo Chat needs a long-running app server for streamed answers, a separate background worker that reads the job queue, Postgres with pgvector, and Redis. Railway runs all four as normal services from the same Dockerfile, with managed Postgres and Redis next to them on a private network.
+
+What runs there:
+
+| Service | How it is set up |
+|---|---|
+| `app` | Next.js frontend and API from the repo's Dockerfile. Migrations run as a pre-deploy step, so a failed migration stops the release. Health check on `/api/health`. |
+| `worker` | Same image, started with `tsx src/worker/main.ts` |
+| Postgres | Railway's managed Postgres. Its image already includes pgvector, so `CREATE EXTENSION vector` worked unchanged. |
+| Redis | Railway's managed Redis |
+
+- The Gemini and Exa keys were copied from the local `.env` into Railway variables only. Nothing secret is in git.
+- The app connects as its own database role without `BYPASSRLS`, created by the migration with a generated password, exactly as in Docker. Row-level security works the same in production.
+- Deploys are pushed from the Mac with `railway up`. The service is not yet linked to GitHub for automatic deploys.
+- It runs on Railway's trial credit, with no card on file.
+
+**Checks on the live site:** health (Postgres and Redis up), the isolation smoke test (no session and forged tokens rejected, users see only their own chats), and a two-chat memory test. Telling it a fact in one chat and asking "earlier I told you about my dog, what was her name?" in a new chat recalled the first chat and answered correctly. The first try missed: the Gemini planner call failed, and the backup rules only turn on memory when the question points back to an earlier chat.
+
+### 3.9 Renamed to Memo Chat, with an icon (17 Nov)
+
+"Mini Chat" became **Memo Chat**, a name that says what makes it different: it remembers.
+
+- Renamed in the UI, docs, package, Docker image and compose project, database defaults (`memochat`, `memochat_app`), the `MEMOCHAT_FAKE_NOW` setting and the session issuer.
+- The live URL became `memo-chat.up.railway.app`, so the name shows in the address bar.
+- A browser tab icon (SVG, ICO and Apple touch icon): a black rounded square, white M and the orange dot, matching the in-app logo.
+- The GitHub repository rename to `memo-chat` is still to do; GitHub will redirect the old URL once it is renamed.
+
+### 3.10 Real sign-in: email and password, or guest (17 Nov)
+
+The no-password "pick a username" login was fine locally but unsafe on a public URL, since anyone could open anyone's chats by typing their username.
+
+**Decision:** a new `AUTH_MODE=password`, now the default when nothing is set, with two ways in:
+
+- **Email and password.** Passwords are hashed with scrypt from Node's own crypto (no native dependency), with a random salt per password and a constant-time check. A wrong password and an unknown email get the same message and take the same time, so the form doesn't reveal who has an account. Accounts live in a new `password_accounts` table (migration 002).
+- **Continue as guest.** A new private anonymous user with a 30-day session on that browser. Guests get the same row-level security and token budget as everyone else.
+- Sign-up, sign-in and guest creation are rate-limited per IP and per email in Redis, so the shared Gemini key can't be drained by creating endless guests.
+- The no-password login now only works with `AUTH_MODE=dev`, which local `docker compose` keeps so the `demo` user still works. On the live site it returns 404.
+- OIDC (Auth0, Google and others) is still available with `AUTH_MODE=oidc`.
+
+New tests cover hashing, input rules, duplicate emails, identical errors for bad logins, and that guests and accounts cannot see each other's history. The full suite is 74 tests.
+
+### 3.11 A cleaner home page with a one-time welcome (17 Nov)
+
+The empty chat used to show "What should we look into?" with three example prompts. They only worked with demo history, so for a real new user they were confusing.
+
+- **First visit:** a short welcome with three cards (live answers with sources, memory across chats, what changed since), a privacy note, a guest note where relevant, and a **Get started** button.
+- **Every visit after:** just the logo, "How can I help?" and the message box.
+- Seeing the welcome is stored on the user (`users.welcomed_at`, migration 003), not in the browser, so it never comes back, even on another device.
+
 ---
 
 ## 4. Where we are now
 
 | Item | Status |
 |---|---|
+| Live site | **https://memo-chat.up.railway.app** on Railway (app, worker, Postgres with pgvector, Redis), email/password and guest sign-in |
 | `main` on GitHub | Version 1, the single-user SQLite build |
-| `multi-user` branch | Version 2 (Postgres, auth, Redis, worker, Docker, load test) plus the UI redesign, 5 commits. Pushed to GitHub on 16 Nov, **not yet merged into `main`**. |
+| `multi-user` branch | Version 2 plus the UI redesign, rename, icon, sign-in and welcome. Pushed to GitHub, **not yet merged into `main`**. |
+| GitHub repository | Still named `mini-chat`; rename to `memo-chat` pending |
+| Tests | 74 unit and integration tests pass; live smoke and memory checks pass |
 | `STRESS_TESTS.md` | On the Mac, deliberately kept out of git |
 | `DESIGN.md` | Written for version 2, including "considered and rejected" and "with another week" |
 | Submission | Not yet submitted through the application form |
 
 Before submitting:
 
-1. Merge `multi-user` into `main` (or open a PR and merge it), so the public default branch shows the best version.
-2. Check that the README quick start (`docker compose up --build`) is the first thing a reviewer sees, and that `npm install && npm run dev` still works as the rules require.
-3. Submit the repo link through the form.
+1. Rename the GitHub repository to `memo-chat`.
+2. Merge `multi-user` into `main` (or open a PR and merge it), so the public default branch shows the best version.
+3. Check that the README quick start (`docker compose up --build`) is the first thing a reviewer sees, that `npm install && npm run dev` still works as the rules require, and add the live URL to the README.
+4. Submit the repo link and the live URL through the form.
 
 Known limits today:
 
 - **Verify questions are slow:** about 16–30 s to first text in the eval on Gemini's free tier, against a target of under 12 s. Most of that is rate limits and model latency, not our code.
+- **The free Gemini key** is shared by every user of the live site. Busy periods return "high demand" errors, and the per-user daily budget runs out quickly.
+- **Recall depends on the planner:** when the Gemini planner call fails, memory is only searched if the question clearly points back to an earlier chat.
+- **Guests** lose their history if they clear cookies, and can't yet turn a guest account into a full account.
+- **Accounts** have no password reset or email verification yet.
+- **Deploys** are manual from the Mac, and the site runs on trial credit.
 - The stress-test gaps that are still open: changed decisions aren't retired from the claims ledger, nothing can be deleted on request, only the last 10 turns are replayed, and broad ranges like "two weeks ago" can miss by more than a day.
 
 ---
@@ -289,6 +349,18 @@ Known limits today:
 **Change tracking**
 
 - Watchers that re-check shortlisted vendors daily and diff stored page snapshots, so "has it changed?" is answered from a timeline, not a single fresh fetch.
+
+**Accounts and sign-in**
+
+- Password reset and email verification (needs an email provider).
+- "Save this guest" to turn a guest's history into a full account.
+- Google and GitHub sign-in through the existing OIDC support.
+
+**Running the live site**
+
+- Link the Railway services to GitHub so pushes to `main` deploy automatically.
+- A paid Gemini key or a second model provider for the live site, with alerts when the fallback rate rises.
+- Database backups, a custom domain, and moving from trial credit to a paid plan if usage grows.
 
 **Trust and data control**
 
