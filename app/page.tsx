@@ -27,6 +27,7 @@ type Settings = {
   demoTools: boolean;
   user: { id: string; name: string | null; guest?: boolean };
   welcomed?: boolean;
+  preferredName?: string | null;
   budget: { dailyTokens: number; usedToday: number };
 };
 
@@ -112,9 +113,6 @@ function plainText(node: React.ReactNode): string {
   if (typeof node === "object" && "props" in node) return plainText((node.props as { children?: React.ReactNode }).children);
   return "";
 }
-function citedRefs(text: string): Set<string> {
-  return new Set([...text.matchAll(/\b([SM]\d+)\b/g)].map((m) => m[1] ?? ""));
-}
 
 function dayLabel(d: string | null, today: string): string {
   if (!d) return "Earlier";
@@ -161,6 +159,7 @@ export default function Page() {
   const [fakeNowInput, setFakeNowInput] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [welcome, setWelcome] = useState(false);
+  const [nameInput, setNameInput] = useState("");
   const [userTz, setUserTz] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const turnRef = useRef<string | null>(null);
@@ -240,7 +239,27 @@ export default function Page() {
     const userMsg: Msg = { id: `tmp-u-${Date.now()}`, role: "user", text: t, sources: [], memory: null };
     const asst: Msg = { id: `tmp-a-${Date.now()}`, role: "assistant", text: "", sources: [], memory: null };
     setMessages((m) => [...m, userMsg, asst]);
-    const update = (fn: (a: Msg) => Msg) => setMessages((ms) => ms.map((x) => (x.id === asst.id ? fn(x) : x)));
+    let curId = asst.id; // becomes the server's id when the turn is done
+    const update = (fn: (a: Msg) => Msg) => setMessages((ms) => ms.map((x) => (x.id === curId ? fn(x) : x)));
+
+    // Smooth streaming: the model sends text in bursts; reveal it at a steady pace instead.
+    // Each frame shows a slice of what has arrived but isn't on screen yet, so bursts flow in
+    // and the display never falls far behind.
+    let received = "";
+    let shown = 0;
+    let raf = 0;
+    const tick = () => {
+      raf = 0;
+      const backlog = received.length - shown;
+      if (backlog <= 0) return;
+      shown = Math.min(received.length, shown + Math.max(2, Math.ceil(backlog / 24)));
+      const text = received.slice(0, shown);
+      update((a) => ({ ...a, text }));
+      raf = requestAnimationFrame(tick);
+    };
+    const pump = () => {
+      if (!raf) raf = requestAnimationFrame(tick);
+    };
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -257,11 +276,13 @@ export default function Page() {
       else if (e.type === "memory") update((a) => ({ ...a, memory: { status: e.status, resolved: e.resolved, recalled: e.recalled } }));
       else if (e.type === "text") {
         setStatus(null);
-        update((a) => ({ ...a, text: a.text + e.delta }));
+        received += e.delta;
+        pump();
       } else if (e.type === "sources") update((a) => ({ ...a, sources: [...a.sources, ...e.sources] }));
       else if (e.type === "done") {
         finished = true;
         update((a) => ({ ...a, id: e.assistantMessageId, timings: e.timings }));
+        curId = e.assistantMessageId;
       } else if (e.type === "error") {
         finished = true;
         update((a) => ({ ...a, error: e.message }));
@@ -342,23 +363,16 @@ export default function Page() {
     );
   };
   const MdStrong = ({ children }: { children?: React.ReactNode }) => {
-    const v = verdictOf(plainText(children));
+    const plain = plainText(children);
+    if (/^[\s,]*(?:\[?[SM]\d+\]?[\s,]*)+$/.test(plain)) return <>{children}</>; // never bold a citation
+    const v = verdictOf(plain);
     return v ? <span className={`verdict ${v}`}>{children}</span> : <strong>{children}</strong>;
   };
   const mdComponents = { a: MdLink, strong: MdStrong };
 
-  const SourceCard = ({ s }: { s: Source }) => (
-    <a className="source" href={s.url} target="_blank" rel="noreferrer" title={s.url}>
-      <span className="top"><span className="ref">{s.ref}</span><span className="host">{hostOf(s.url)}</span></span>
-      <span className="title">{s.title && s.title !== s.url ? s.title : s.url.replace(/^https?:\/\/(www\.)?/, "")}</span>
-      <span className="dates">
-        {s.publishedAt ? `Published ${s.publishedAt} · ` : ""}Retrieved {s.retrievedAt}
-      </span>
-    </a>
-  );
-
   function renderContext(m: Msg) {
-    const mem = m.memory && m.memory.status !== "not_needed" ? m.memory : null;
+    // Memory context only when something was actually recalled.
+    const mem = m.memory && m.memory.recalled.length > 0 ? m.memory : null;
     const tally = m.text ? tallyVerdicts(m.text) : { changed: 0, same: 0, unknown: 0 };
     const checked = tally.changed + tally.same + tally.unknown;
     const since = mem?.recalled[0]?.local_date ?? mem?.resolved[0]?.date;
@@ -381,17 +395,13 @@ export default function Page() {
           <div className="ctx-row">
             <span className="ctx-label"><i className="i-mem" />Recalled</span>
             <span className="ctx-body">
-              {mem.status === "none" || mem.recalled.length === 0 ? (
-                <span className="muted">No matching past conversation</span>
-              ) : (
-                mem.recalled.map((r) => (
+              {mem.recalled.map((r) => (
                   <button key={r.ref} className="recall" title={`Open: ${r.conversation_title ?? ""}`} onClick={() => void openConv(r.conversation_id)}>
                     <span className="ref">{r.ref}</span>
                     <span className="t">{r.conversation_title ?? "Untitled"}</span>
                     <span className="d">{fmtDate(r.local_date, today)}</span>
                   </button>
-                ))
-              )}
+              ))}
             </span>
           </div>
         )}
@@ -409,7 +419,7 @@ export default function Page() {
               ) : (
                 <span className="muted">Rechecked live</span>
               )}
-              {m.sources.length > 0 && <span className="muted">{m.sources.length} sources</span>}
+              {m.sources.length > 0 && <span className="muted">{m.sources.length} sources read</span>}
             </span>
           </div>
         )}
@@ -417,36 +427,18 @@ export default function Page() {
     );
   }
 
-  function renderSources(m: Msg) {
-    if (m.sources.length === 0) return null;
-    const cited = citedRefs(m.text);
-    const used = m.sources.filter((s) => cited.has(s.ref));
-    const rest = m.sources.filter((s) => !cited.has(s.ref));
-    const primary = used.length ? used : rest.slice(0, 4);
-    const extra = used.length ? rest : rest.slice(4);
-    return (
-      <div className="sources">
-        <div className="sources-head">
-          <strong>{used.length ? "Cited sources" : "Sources"}</strong>
-          <span className="muted">{used.length ? `${used.length} of ${m.sources.length} read this turn` : `${m.sources.length} read this turn`}</span>
-        </div>
-        <div className="source-grid">
-          {primary.map((s) => <SourceCard key={s.ref} s={s} />)}
-        </div>
-        {extra.length > 0 && (
-          <details className="more-sources">
-            <summary>{extra.length} more consulted</summary>
-            <div className="source-grid">
-              {extra.map((s) => <SourceCard key={s.ref} s={s} />)}
-            </div>
-          </details>
-        )}
-      </div>
-    );
-  }
-
   const budgetPct = settings && settings.budget.dailyTokens > 0 ? Math.min(100, Math.round((settings.budget.usedToday / settings.budget.dailyTokens) * 100)) : null;
-  const userName = settings ? settings.user.name ?? settings.user.id : "";
+  const userName = settings ? settings.preferredName ?? settings.user.name ?? settings.user.id : "";
+  const greetName = settings?.preferredName ?? null;
+
+  async function finishWelcome() {
+    const name = nameInput.trim();
+    setWelcome(false);
+    if (name) {
+      setSettings((s) => (s ? { ...s, preferredName: name.slice(0, 40) } : s));
+      await api("/api/profile", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name }) });
+    }
+  }
 
   return (
     <div className="app">
@@ -538,19 +530,25 @@ export default function Page() {
                     </div>
                   ))}
                 </div>
+                {!greetName && (
+                  <form className="welcome-name" onSubmit={(e) => (e.preventDefault(), void finishWelcome())}>
+                    <label htmlFor="welcome-name">What should I call you?</label>
+                    <input id="welcome-name" value={nameInput} onChange={(e) => setNameInput(e.target.value)} placeholder="Your name" maxLength={40} autoComplete="given-name" />
+                  </form>
+                )}
                 <div className="welcome-foot">
                   <span className="muted">
                     {settings?.user.guest
                       ? "You’re using a guest account: chats stay on this browser. Create an account to keep them."
                       : "Your history is private to your account."}
                   </span>
-                  <button className="btn btn-ink" onClick={() => setWelcome(false)}>Get started</button>
+                  <button className="btn btn-ink" onClick={() => void finishWelcome()}>Get started</button>
                 </div>
               </div>
             ) : (
               <div className="empty quiet">
                 <span className="brand-mark" aria-hidden />
-                <h2>How can I help?</h2>
+                <h2>{greetName ? `How can I help you, ${greetName}?` : "How can I help?"}</h2>
               </div>
             )
           ) : (
@@ -574,7 +572,6 @@ export default function Page() {
                       )}
                       {m.error && <div className="error">{m.error}</div>}
                       {m.degraded && <div className="fallback" title="The main model was unavailable">Answered by fallback model {m.degraded}</div>}
-                      {renderSources(m)}
                     </>
                   )}
                 </div>

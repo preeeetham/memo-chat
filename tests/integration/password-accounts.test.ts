@@ -79,6 +79,15 @@ describe.skipIf(!available)("password accounts and guests", () => {
     expect(await count(g2.id)).toBe(0);
   });
 
+  it("stores the name given at sign-up and lets the user change it", async () => {
+    const up = await pw.signUp("named@example.com", "a strong password", repo.cleanName("  Rishi   D V "));
+    if (!up.ok) throw new Error("sign-up failed");
+    expect(await db.asUser(up.user.id, () => repo.getPreferredName())).toBe("Rishi D V");
+    await db.asUser(up.user.id, () => repo.setPreferredName(repo.cleanName("Rishi")));
+    expect(await db.asUser(up.user.id, () => repo.getPreferredName())).toBe("Rishi");
+    expect(repo.cleanName("   ")).toBeNull();
+  });
+
   it("the app role cannot read another user's row through users", async () => {
     const g = await pw.createGuest();
     const rows = await db.asUser(g.id, () => db.q<{ id: string }>("SELECT id FROM users"));

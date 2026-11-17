@@ -13,6 +13,7 @@ export default function Login() {
   const [tab, setTab] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -43,7 +44,7 @@ export default function Login() {
 
   function emailLogin(e: React.FormEvent) {
     e.preventDefault();
-    void post(tab === "signin" ? "/api/auth/signin" : "/api/auth/signup", { email, password });
+    void post(tab === "signin" ? "/api/auth/signin" : "/api/auth/signup", tab === "signin" ? { email, password } : { name, email, password });
   }
 
   return (
@@ -74,6 +75,9 @@ export default function Login() {
                 </button>
               </div>
               <form onSubmit={emailLogin}>
+                {tab === "signup" && (
+                  <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" aria-label="Your name" autoComplete="name" maxLength={40} />
+                )}
                 <input type="email" autoFocus value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" aria-label="Email" autoComplete="email" required />
                 <input
                   type="password"

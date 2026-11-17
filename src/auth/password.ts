@@ -47,7 +47,7 @@ const randomUserPart = () => randomBytes(12).toString("hex");
 
 export type AuthResult = { ok: true; user: SessionUser } | { ok: false; status: number; error: string };
 
-export async function signUp(emailRaw: string, password: string): Promise<AuthResult> {
+export async function signUp(emailRaw: string, password: string, preferredName: string | null = null): Promise<AuthResult> {
   const email = normaliseEmail(emailRaw);
   if (!email) return { ok: false, status: 400, error: "Enter a valid email address." };
   const problem = passwordProblem(password);
@@ -59,7 +59,9 @@ export async function signUp(emailRaw: string, password: string): Promise<AuthRe
     // One transaction: the user row (inserted as that user, for row-level security) and the account row.
     await asUser(id, () =>
       tx(async (q) => {
-        await q("INSERT INTO users (id, issuer, subject, display_name, email) VALUES ($1, 'pw', $2, $3, $4)", [id, id.slice(3), name, email]);
+        await q("INSERT INTO users (id, issuer, subject, display_name, email, preferred_name) VALUES ($1, 'pw', $2, $3, $4, $5)", [
+          id, id.slice(3), preferredName ?? name, email, preferredName,
+        ]);
         await q("INSERT INTO password_accounts (email, user_id, password_hash) VALUES ($1, $2, $3)", [email, id, hash]);
       }),
     );
@@ -67,7 +69,7 @@ export async function signUp(emailRaw: string, password: string): Promise<AuthRe
     if ((err as { code?: string }).code === "23505") return { ok: false, status: 409, error: "An account with this email already exists. Sign in instead." };
     throw err;
   }
-  return { ok: true, user: { id, name } };
+  return { ok: true, user: { id, name: preferredName ?? name } };
 }
 
 export async function signIn(emailRaw: string, password: string): Promise<AuthResult> {

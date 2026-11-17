@@ -66,6 +66,20 @@ export async function upsertUser(u: { issuer: string; subject: string; displayNa
   );
 }
 
+/** Clean a name typed by the user: trimmed, single spaces, at most 40 characters; null when empty. */
+export function cleanName(name: unknown): string | null {
+  const n = String(name ?? "").replace(/\s+/g, " ").trim().slice(0, 40);
+  return n || null;
+}
+
+export async function getPreferredName(): Promise<string | null> {
+  return (await q<{ preferred_name: string | null }>("SELECT preferred_name FROM users"))[0]?.preferred_name ?? null;
+}
+
+export async function setPreferredName(name: string | null): Promise<void> {
+  await q("UPDATE users SET preferred_name = $1", [name]);
+}
+
 /** Has this user already seen the first-visit welcome? */
 export async function isWelcomed(): Promise<boolean> {
   return Boolean((await q<{ welcomed_at: string | null }>("SELECT welcomed_at FROM users"))[0]?.welcomed_at);
