@@ -109,6 +109,11 @@ export async function recall(p: Plan, resolutions: Resolution[], conversationId:
           // The user named the day; show what happened then even if the words differ.
           chosen.push(...anyOnDay.turns.slice(0, MAX_TURNS_PER_DAY));
           note = `Conversations on ${rangeLabel(anyOnDay.range)} don't mention the topic keywords; showing everything from that day.`;
+        } else if (wideTurns.length) {
+          // Nothing on the named day at all, but the user talked to us the day before or after
+          // (e.g. "this morning" asked just past midnight): show those, newest first.
+          chosen.push(...[...wideTurns].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, MAX_TURNS_PER_DAY));
+          note = `No conversation on ${rangeLabel(first)} itself; these are from the day next to it (${rangeLabel(wide)}). Say which date they are from.`;
         }
       }
     }

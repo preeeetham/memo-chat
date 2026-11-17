@@ -5,7 +5,11 @@ import type { EvidenceBundle } from "./recall";
 const day = (d: string) => (/^\d{4}-\d{2}-\d{2}$/.test(d) ? `${shortLabel(d)} ${d.slice(0, 4)}` : d);
 
 export function renderContext(nowLine: string, b: EvidenceBundle): string {
-  const lines: string[] = [`Current date and time for the user: ${nowLine}.`];
+  const lines: string[] = [
+    `Current date and time for the user: ${nowLine}.`,
+    // Small models fall back to "I have no memory between sessions"; restate the truth every turn.
+    "You DO have memory of this user's earlier chats: the [M#] records in this and earlier context notes come from it. If asked how you knew something from an earlier chat, say you recalled it from your memory of that conversation (give its date and [M#]); never say chats or sessions start fresh.",
+  ];
   if (b.resolved.length) {
     lines.push(`Resolved dates: ${b.resolved.map((r) => `"${r.expr}" = ${r.date.includes("..") ? r.date.replace("..", " to ") : day(r.date)}`).join("; ")}.`);
   }

@@ -16,6 +16,18 @@ describe("resolve: relative days", () => {
   it("day before yesterday", () => expect(r("the day before yesterday")).toEqual([d("2026-11-09")]));
 });
 
+describe("resolve: just after midnight the user's 'today' includes the day that just ended", () => {
+  // Thu 12 Nov 2026, 00:59 in Asia/Kolkata (Wed 11 Nov 19:29 UTC)
+  const AFTER_MIDNIGHT = new Date("2026-11-11T19:29:00Z");
+  const both = { start: "2026-11-11", end: "2026-11-12" };
+  it("today morning or afternoon", () => expect(r("today morning or after noon", AFTER_MIDNIGHT)).toEqual([both]));
+  it("this morning", () => expect(r("this morning", AFTER_MIDNIGHT)).toEqual([both]));
+  it("earlier today", () => expect(r("earlier today", AFTER_MIDNIGHT)).toEqual([both]));
+  it("last night", () => expect(r("last night", AFTER_MIDNIGHT)).toEqual([both]));
+  it("yesterday is still yesterday", () => expect(r("yesterday", AFTER_MIDNIGHT)).toEqual([d("2026-11-11")]));
+  it("after 5 am, today is just today", () => expect(r("this morning", new Date("2026-11-12T01:00:00Z"))).toEqual([d("2026-11-12")]));
+});
+
 describe("resolve: weekdays", () => {
   it("bare Monday -> most recent Monday", () => expect(r("Monday")).toEqual([d("2026-11-09")]));
   it("on Monday", () => expect(r("on Monday")).toEqual([d("2026-11-09")]));

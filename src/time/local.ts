@@ -25,6 +25,12 @@ export function localDate(instant: Date, tz: string): string {
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
+/** The hour (0-23) of `instant` on the clock in `tz`. */
+export function localHour(instant: Date, tz: string): number {
+  const h = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", hourCycle: "h23" }).format(instant);
+  return Number(h) % 24;
+}
+
 const toUTC = (d: string) => new Date(`${d}T00:00:00Z`);
 const fromUTC = (d: Date) => d.toISOString().slice(0, 10);
 

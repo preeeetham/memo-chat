@@ -3,7 +3,7 @@
  * Pure and deterministic (no model involved) so it can be unit-tested against a fixed clock.
  */
 import * as chrono from "chrono-node";
-import { addDays, localDate, shortLabel, weekday } from "./local";
+import { addDays, localDate, localHour, shortLabel, weekday } from "./local";
 
 export type DateRange = { start: string; end: string }; // inclusive local dates, YYYY-MM-DD
 export type Resolution = { expr: string; label: string; candidates: DateRange[] };
@@ -59,9 +59,14 @@ export function resolve(expr: string, now: Date, tz: string): Resolution {
   const out = (candidates: DateRange[]): Resolution => ({ expr: expr.trim(), label: labelFor(expr.trim(), candidates), candidates });
   let m: RegExpMatchArray | null;
 
-  if (/\b(today|earlier today|this (morning|afternoon|evening)|tonight|just now|an hour ago|few hours ago)\b/.test(e)) return out([day(today)]);
+  // Before 5 am the user is usually still in "their" day: "this morning" or "today" at 1 am means the
+  // day that just ended (or the last hour), so search yesterday and today together.
+  const lateNight = localHour(now, tz) < 5;
+  const todayish = lateNight ? range(addDays(today, -1), today) : day(today);
+  if (/\b(today|earlier today|this (morning|afternoon|evening)|tonight|just now|an hour ago|few hours ago)\b/.test(e)) return out([todayish]);
   if (/\bday before yesterday\b/.test(e)) return out([day(addDays(today, -2))]);
-  if (/\b(yesterday|last night)\b/.test(e)) return out([day(addDays(today, -1))]);
+  if (/\blast night\b/.test(e)) return out([lateNight ? range(addDays(today, -1), today) : day(addDays(today, -1))]);
+  if (/\byesterday\b/.test(e)) return out([day(addDays(today, -1))]);
 
   if ((m = e.match(new RegExp(`\\blast ${WEEKDAY_RE}\\b`)))) {
     const wd = weekdayIndex(m[1]!);

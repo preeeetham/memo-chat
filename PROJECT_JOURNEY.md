@@ -302,6 +302,16 @@ The app had its own cap of 300,000 tokens per user per day. That number was ours
 
 **Decision:** the daily token budget is now off by default (`DAILY_TOKEN_BUDGET=0`) and the usage bar is hidden. The cap still exists as a setting for a deployment that needs one. What stays on is the per-user limit of 20 messages a minute, and Gemini's own rate-limit and "high demand" errors now show a short "wait a few seconds and try again" message instead of a raw error.
 
+### 3.13 Memory across chats after midnight (18 Nov)
+
+Testing found a real recall miss. In a new chat, "who were we discussing this morning?" asked just after midnight in India looked only at the new calendar day, found nothing, and the model answered from a web search instead. Asked how it knew, it then claimed it had no memory between sessions. Three fixes:
+
+- Before 5 am local time, "today", "this morning/afternoon", "earlier today" and "last night" cover the day that just ended as well.
+- If the named day has no chats at all, recall falls back to the conversations on the day next to it and says which date they are from.
+- The prompt and every context note now tell the model it has memory of the user's chats across all conversations, to cite the [M#] record, and never to say chats start fresh.
+
+New tests cover cross-chat recall by time, just after midnight, and the empty-day fallback. On the live site the same two questions now answer from memory ("earlier today… [M1]") and say so when asked how.
+
 ---
 
 ## 4. Where we are now
