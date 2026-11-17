@@ -5,7 +5,7 @@ A chat agent with one tool, `web_search`, that also remembers what was said in e
 ## How it works
 
 ```
-POST /api/chat ──► 0 verify session/JWT → user_id; per-user rate limit + daily token budget (Redis)
+POST /api/chat ──► 0 verify session/JWT → user_id; per-user rate limit, optional daily token budget (Redis)
                    1 persist user msg (as user_id: RLS)
                    2 planner (helper LLM, JSON, ≤5s, cached per user in Redis, regex fallback)
                    3 resolve dates in code ("last Tuesday" → 10 Nov | 3 Nov)
@@ -62,7 +62,7 @@ The compose file is the single-region, single-shard version of the multi-user ar
 | Data | one Postgres, `(user_id, …)` keys and indexes | sharded by `user_id` (Citus or app routing) behind PgBouncer; recall on read replicas; messages partitioned by month |
 | History tiers | all hot | hot 90 days, warm partitions to 18 months, cold raw history in S3 (digests, claims and embeddings stay hot) |
 | Queue | outbox + Redis stream + sweep | outbox relayed by CDC to Kafka/SQS partitioned by `user_id`, KEDA-scaled workers, priority lanes |
-| LLM | fallback model, per-user token budget | LLM gateway: global TPM governor, multi-region failover, prompt caching, cost metering |
+| LLM | fallback model, per-user rate limit, optional per-user token budget | LLM gateway: global TPM governor, multi-region failover, prompt caching, cost metering |
 | Search | shared query cache, coalescing, fallback provider | page snapshot cache, per-provider rate limits and spend budgets |
 | Regions | one | users homed to a region with their shard; active-active app tier |
 | Observability | structured logs, per-turn timings in `meta_json` | OpenTelemetry traces per turn, SLO alerts (p95 TTFT, queue lag, fallback rate) |

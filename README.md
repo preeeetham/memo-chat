@@ -33,7 +33,7 @@ If a key is missing the app still starts and tells you what to fill in.
 app      Next.js UI + API (stateless; scale with --scale app=N behind a load balancer)
 worker   post-turn extraction: digests, claims ledger, embeddings (--scale worker=N)
 postgres conversations, messages, digests, claims, web evidence, outbox; RLS per user
-redis    plan/search/embedding caches, rate limits + token budgets, SSE buffers, job stream
+redis    plan/search/embedding caches, rate limits (+ optional token budgets), SSE buffers, job stream
 migrate  one-shot: applies db/migrations, creates the app's non-superuser role
 seed     one-shot: demo history for user "demo" (SEED_DEMO=false to skip)
 ```
@@ -52,7 +52,7 @@ The verified user id becomes `app.user_id` for the database transaction, and eve
 
 | Setting | Default | |
 |---|---|---|
-| `DAILY_TOKEN_BUDGET` | 300000 | per user per UTC day; 0 = unlimited |
+| `DAILY_TOKEN_BUDGET` | 0 (off) | optional cap on tokens per user per UTC day; 0 = unlimited |
 | `RATE_LIMIT_PER_MINUTE` | 20 | chat turns per user |
 | `LLM_FALLBACK_MODEL` | (none) | used when the main model is rate-limited or down; the answer is marked degraded |
 | `SEARCH_FALLBACK_PROVIDER` | (none) | e.g. `tavily` when Exa fails |

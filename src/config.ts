@@ -73,7 +73,7 @@ export function config(): Config {
       oidcAudience: env("OIDC_AUDIENCE") || env("OIDC_CLIENT_ID"),
       publicUrl: (env("PUBLIC_URL") || "http://localhost:3000").replace(/\/$/, ""),
     },
-    budgets: { dailyTokens: num("DAILY_TOKEN_BUDGET", 300_000), requestsPerMinute: num("RATE_LIMIT_PER_MINUTE", 20) },
+    budgets: { dailyTokens: num("DAILY_TOKEN_BUDGET", 0), requestsPerMinute: num("RATE_LIMIT_PER_MINUTE", 20) },
     demoTools: env("DEMO_TOOLS") !== "false",
     fakeNow: env("MEMOCHAT_FAKE_NOW") || null,
     limits: {

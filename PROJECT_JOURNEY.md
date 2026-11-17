@@ -281,7 +281,7 @@ The no-password "pick a username" login was fine locally but unsafe on a public 
 **Decision:** a new `AUTH_MODE=password`, now the default when nothing is set, with two ways in:
 
 - **Email and password.** Passwords are hashed with scrypt from Node's own crypto (no native dependency), with a random salt per password and a constant-time check. A wrong password and an unknown email get the same message and take the same time, so the form doesn't reveal who has an account. Accounts live in a new `password_accounts` table (migration 002).
-- **Continue as guest.** A new private anonymous user with a 30-day session on that browser. Guests get the same row-level security and token budget as everyone else.
+- **Continue as guest.** A new private anonymous user with a 30-day session on that browser. Guests get the same row-level security and per-minute rate limit as everyone else.
 - Sign-up, sign-in and guest creation are rate-limited per IP and per email in Redis, so the shared Gemini key can't be drained by creating endless guests.
 - The no-password login now only works with `AUTH_MODE=dev`, which local `docker compose` keeps so the `demo` user still works. On the live site it returns 404.
 - OIDC (Auth0, Google and others) is still available with `AUTH_MODE=oidc`.
@@ -295,6 +295,12 @@ The empty chat used to show "What should we look into?" with three example promp
 - **First visit:** a short welcome with three cards (live answers with sources, memory across chats, what changed since), a privacy note, a guest note where relevant, and a **Get started** button.
 - **Every visit after:** just the logo, "How can I help?" and the message box.
 - Seeing the welcome is stored on the user (`users.welcomed_at`, migration 003), not in the browser, so it never comes back, even on another device.
+
+### 3.12 Daily token limit turned off (17 Nov)
+
+The app had its own cap of 300,000 tokens per user per day. That number was ours, not Gemini's: Gemini limits requests and tokens **per minute** for the whole API key, and has no per-user daily token allowance. In testing, one or two real research turns could use most of a day's cap, which would block a reviewer mid-test.
+
+**Decision:** the daily token budget is now off by default (`DAILY_TOKEN_BUDGET=0`) and the usage bar is hidden. The cap still exists as a setting for a deployment that needs one. What stays on is the per-user limit of 20 messages a minute, and Gemini's own rate-limit and "high demand" errors now show a short "wait a few seconds and try again" message instead of a raw error.
 
 ---
 
@@ -321,7 +327,7 @@ Before submitting:
 Known limits today:
 
 - **Verify questions are slow:** about 16–30 s to first text in the eval on Gemini's free tier, against a target of under 12 s. Most of that is rate limits and model latency, not our code.
-- **The free Gemini key** is shared by every user of the live site. Busy periods return "high demand" errors, and the per-user daily budget runs out quickly.
+- **The free Gemini key** is shared by every user of the live site. Busy periods return "high demand" errors, which the app now explains in plain words and asks the user to retry.
 - **Recall depends on the planner:** when the Gemini planner call fails, memory is only searched if the question clearly points back to an earlier chat.
 - **Guests** lose their history if they clear cookies, and can't yet turn a guest account into a full account.
 - **Accounts** have no password reset or email verification yet.

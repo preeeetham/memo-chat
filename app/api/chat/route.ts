@@ -69,7 +69,8 @@ function friendlyError(err: unknown): string {
   const e = err as { status?: number; message?: string; name?: string };
   if (e?.name === "AbortError") return "Stopped.";
   if (e?.status === 401 || e?.status === 403) return "The LLM provider rejected the API key. Check LLM_API_KEY in .env.";
-  if (e?.status === 429) return "The LLM provider is rate-limiting requests. Wait a moment and try again.";
+  if (e?.status === 429) return "The AI model is getting too many requests right now. Wait a few seconds and try again.";
+  if (typeof e?.status === "number" && e.status >= 500) return "The AI model is busy right now (high demand). Wait a few seconds and try again.";
   if (e?.status === 404) return "The model was not found. Check LLM_MODEL and LLM_BASE_URL in .env.";
   return `Something went wrong: ${e?.message?.slice(0, 200) ?? "unknown error"}`;
 }
