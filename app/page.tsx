@@ -25,7 +25,8 @@ type Settings = {
   now: string;
   fakeNow: string | null;
   demoTools: boolean;
-  user: { id: string; name: string | null };
+  user: { id: string; name: string | null; guest?: boolean };
+  welcomed?: boolean;
   budget: { dailyTokens: number; usedToday: number };
 };
 
@@ -60,10 +61,11 @@ async function readEvents(body: ReadableStream<Uint8Array>, onEvent: (seq: numbe
   }
 }
 
-const SUGGESTIONS = [
-  { kind: "Recall and recheck", q: "On Monday we shortlisted 5 CRM tools for a 20-person sales team. Has any of them changed pricing or shipped something big since?" },
-  { kind: "Find by date", q: "What did I ask you on 3 November? Is your answer still correct today?" },
-  { kind: "What changed since", q: "Last Tuesday I asked you about Postgres hosting. Has any pricing changed since then?" },
+/** First-visit welcome: what the product does, shown once per user. */
+const WELCOME_POINTS = [
+  { title: "Live answers with sources", text: "Ask about anything current. I search the web and cite what I used." },
+  { title: "Memory across chats", text: "Refer back by topic or date, like “what did I ask last Tuesday?”, and I’ll find it." },
+  { title: "What changed since", text: "Ask me to recheck an earlier answer and I’ll mark each point as changed or still correct." },
 ];
 
 const tz = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -158,6 +160,7 @@ export default function Page() {
   const [showSettings, setShowSettings] = useState(false);
   const [fakeNowInput, setFakeNowInput] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [welcome, setWelcome] = useState(false);
   const [userTz, setUserTz] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const turnRef = useRef<string | null>(null);
@@ -173,6 +176,11 @@ export default function Page() {
     const s = (await api("/api/settings").then((x) => x.json())) as Settings;
     setSettings(s);
     setFakeNowInput(s.fakeNow ?? "");
+    // Show the welcome on this visit only, and record it so it never comes back (on any device).
+    if (s.welcomed === false) {
+      setWelcome(true);
+      void api("/api/welcome", { method: "POST" });
+    }
   }, []);
   const openConv = useCallback(async (id: string) => {
     setSidebarOpen(false);
@@ -225,6 +233,7 @@ export default function Page() {
   async function send(text: string) {
     const t = text.trim();
     if (!t || busy) return;
+    setWelcome(false);
     setInput("");
     setBusy(true);
     setStatus("Thinking…");
@@ -517,27 +526,33 @@ export default function Page() {
         </div>
         <div className="messages" ref={scrollRef} onClick={() => sidebarOpen && setSidebarOpen(false)}>
           {messages.length === 0 ? (
-            <div className="empty">
-              <h1>
-                What should we <span className="accent">look into</span>?
-              </h1>
-              <p className="lede">I remember our past conversations by date, check the live web, and tell you what changed since.</p>
-              <div className="section-label">Try asking</div>
-              <div className="suggestions">
-                {SUGGESTIONS.map((s, i) => (
-                  <button key={s.q} className="suggestion" onClick={() => void send(s.q)} disabled={busy}>
-                    <span className="num">{i + 1}.</span>
-                    <span className="kind">{s.kind}</span>
-                    <span className="q">{s.q}</span>
-                  </button>
-                ))}
+            welcome ? (
+              <div className="empty welcome">
+                <h1>Welcome to Memo Chat</h1>
+                <p className="lede">A research assistant that remembers your conversations and keeps its answers current.</p>
+                <div className="welcome-points">
+                  {WELCOME_POINTS.map((p) => (
+                    <div key={p.title} className="welcome-point">
+                      <div className="t">{p.title}</div>
+                      <div className="d">{p.text}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="welcome-foot">
+                  <span className="muted">
+                    {settings?.user.guest
+                      ? "You’re using a guest account: chats stay on this browser. Create an account to keep them."
+                      : "Your history is private to your account."}
+                  </span>
+                  <button className="btn btn-ink" onClick={() => setWelcome(false)}>Get started</button>
+                </div>
               </div>
-              <div className="note">
-                {settings?.demoTools
-                  ? "The recall examples need history: load the demo history from demo tools, or sign in as demo."
-                  : "The recall examples work once you have some history: chat for a bit, then ask about it later."}
+            ) : (
+              <div className="empty quiet">
+                <span className="brand-mark" aria-hidden />
+                <h2>How can I help?</h2>
               </div>
-            </div>
+            )
           ) : (
             <div className="thread">
               {messages.map((m, idx) => (

@@ -66,6 +66,16 @@ export async function upsertUser(u: { issuer: string; subject: string; displayNa
   );
 }
 
+/** Has this user already seen the first-visit welcome? */
+export async function isWelcomed(): Promise<boolean> {
+  return Boolean((await q<{ welcomed_at: string | null }>("SELECT welcomed_at FROM users"))[0]?.welcomed_at);
+}
+
+/** Record that the welcome was shown. Idempotent: the first time wins. */
+export async function markWelcomed(): Promise<void> {
+  await q("UPDATE users SET welcomed_at = COALESCE(welcomed_at, now())");
+}
+
 export async function getUser(): Promise<{ id: string; display_name: string | null; email: string | null } | undefined> {
   return (await q<{ id: string; display_name: string | null; email: string | null }>("SELECT id, display_name, email FROM users"))[0];
 }
