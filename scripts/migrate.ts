@@ -2,8 +2,8 @@
 import "dotenv/config";
 import { ensureDatabase, migrate } from "../src/db/migrate";
 
-const adminUrl = process.env.MIGRATE_DATABASE_URL || "postgres://postgres:postgres@localhost:5433/minichat";
-const appUrl = process.env.DATABASE_URL || "postgres://minichat_app:minichat_app@localhost:5433/minichat";
+const adminUrl = process.env.MIGRATE_DATABASE_URL || "postgres://postgres:postgres@localhost:5433/memochat";
+const appUrl = process.env.DATABASE_URL || "postgres://memochat_app:memochat_app@localhost:5433/memochat";
 
 for (let attempt = 1; ; attempt++) {
   try {

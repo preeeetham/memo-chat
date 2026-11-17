@@ -10,16 +10,16 @@ import { config } from "../config";
 
 type Discovery = { issuer: string; authorization_endpoint: string; token_endpoint: string; jwks_uri: string };
 
-const g = globalThis as unknown as { __minichatOidc?: { issuer: string; d: Discovery; jwks: ReturnType<typeof createRemoteJWKSet> } };
+const g = globalThis as unknown as { __memochatOidc?: { issuer: string; d: Discovery; jwks: ReturnType<typeof createRemoteJWKSet> } };
 
 async function discover(): Promise<{ d: Discovery; jwks: ReturnType<typeof createRemoteJWKSet> }> {
   const issuer = config().auth.oidcIssuer;
-  if (g.__minichatOidc?.issuer === issuer) return g.__minichatOidc;
+  if (g.__memochatOidc?.issuer === issuer) return g.__memochatOidc;
   const res = await fetch(`${issuer}/.well-known/openid-configuration`, { signal: AbortSignal.timeout(5000) });
   if (!res.ok) throw new Error(`OIDC discovery failed: ${res.status}`);
   const d = (await res.json()) as Discovery;
   const entry = { issuer, d, jwks: createRemoteJWKSet(new URL(d.jwks_uri)) }; // jose caches keys and refetches on rotation
-  g.__minichatOidc = entry;
+  g.__memochatOidc = entry;
   return entry;
 }
 

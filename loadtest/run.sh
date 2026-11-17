@@ -8,7 +8,7 @@ export COMPOSE_FILE=docker-compose.yml:loadtest/docker-compose.loadtest.yml
 docker compose up -d --build --wait app lb worker mock-llm
 docker compose run --rm --no-deps locust || true
 
-pending() { docker compose exec -T postgres psql -U postgres -d minichat -tAc "SELECT count(*) FROM jobs WHERE status IN ('pending','running')"; }
+pending() { docker compose exec -T postgres psql -U postgres -d memochat -tAc "SELECT count(*) FROM jobs WHERE status IN ('pending','running')"; }
 start=$(date +%s); left=$(pending)
 echo "[loadtest] extraction backlog right after the run: $left job(s)"
 while [ "$left" -gt 0 ] && [ $(( $(date +%s) - start )) -lt 600 ]; do sleep 5; left=$(pending); done

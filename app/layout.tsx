@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Mini Chat",
+  title: "Memo Chat",
   description: "A research assistant that remembers past conversations and checks the live web.",
 };
 

@@ -1,18 +1,18 @@
 # docker compose up --build   ->  http://localhost:3000
 # Postgres (with pgvector) + Redis + migrations + optional demo seed + app + worker.
 # The only input needed is API keys in .env (copy .env.example). Values below are local-only defaults.
-name: mini-chat
+name: memo-chat
 
 # One image for app, worker, migrate and seed. Only `migrate` builds it; the others reuse it.
 x-app: &app
-  image: mini-chat:local
+  image: memo-chat:local
   pull_policy: never
   env_file:
     - path: .env
       required: false
   environment: &app-env
-    DATABASE_URL: postgres://minichat_app:${APP_DB_PASSWORD:-minichat_app}@postgres:5432/minichat
-    MIGRATE_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/minichat
+    DATABASE_URL: postgres://memochat_app:${APP_DB_PASSWORD:-memochat_app}@postgres:5432/memochat
+    MIGRATE_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/memochat
     REDIS_URL: redis://redis:6379
     AUTH_SECRET: ${AUTH_SECRET:-dev-only-insecure-secret-change-me}
     PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
@@ -23,11 +23,11 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: minichat
+      POSTGRES_DB: memochat
     ports: ["${POSTGRES_PORT:-5433}:5432"]
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d minichat"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d memochat"]
       interval: 2s
       timeout: 3s
       retries: 30

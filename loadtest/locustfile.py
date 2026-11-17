@@ -1,5 +1,5 @@
 """
-Mini Chat load test: many users, each with their own backdated history, asking the deliverable
+Memo Chat load test: many users, each with their own backdated history, asking the deliverable
 memory questions concurrently through the load balancer. Every response is checked:
 
   - the turn streams to "done",

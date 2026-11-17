@@ -1,4 +1,4 @@
-# Mini Chat: design
+# Memo Chat: design
 
 A chat agent with one tool, `web_search`, that also remembers what was said in each user's past conversations, including what *it* answered and what the web said that day. The sample questions ("On Monday we shortlisted 5 CRMs… has pricing changed since?") are really four problems: resolve a date, recall the right exchange, re-check the web for what changed, and compare honestly. The design is built around those.
 

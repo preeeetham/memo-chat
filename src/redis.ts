@@ -7,12 +7,12 @@
 import { Redis } from "ioredis";
 import { config } from "./config";
 
-const g = globalThis as unknown as { __minichatRedis?: { url: string; client: Redis; settled: boolean } };
+const g = globalThis as unknown as { __memochatRedis?: { url: string; client: Redis; settled: boolean } };
 
 export function redis(): Redis {
   const url = config().redisUrl;
-  if (g.__minichatRedis?.url === url) return g.__minichatRedis.client;
-  g.__minichatRedis?.client.disconnect();
+  if (g.__memochatRedis?.url === url) return g.__memochatRedis.client;
+  g.__memochatRedis?.client.disconnect();
   const client = new Redis(url, {
     maxRetriesPerRequest: 1,
     enableOfflineQueue: true,
@@ -31,7 +31,7 @@ export function redis(): Redis {
     warned = false;
     entry.settled = true;
   });
-  g.__minichatRedis = entry;
+  g.__memochatRedis = entry;
   return client;
 }
 
@@ -41,8 +41,8 @@ export function blockingRedis(): Redis {
 }
 
 export async function closeRedis(): Promise<void> {
-  const c = g.__minichatRedis?.client;
-  g.__minichatRedis = undefined;
+  const c = g.__memochatRedis?.client;
+  g.__memochatRedis = undefined;
   await c?.quit().catch(() => c.disconnect());
 }
 
@@ -55,7 +55,7 @@ export const userKey = (userId: string, ...parts: string[]) => key("u", userId, 
  */
 async function usable(r: Redis): Promise<boolean> {
   if (r.status === "ready") return true;
-  if (g.__minichatRedis?.settled || r.status === "end") return false;
+  if (g.__memochatRedis?.settled || r.status === "end") return false;
   return new Promise<boolean>((resolve) => {
     const done = (ok: boolean) => {
       clearTimeout(timer);

@@ -33,7 +33,7 @@ export default function Login() {
   return (
     <div className="login">
       <nav className="login-nav">
-        <span className="brand"><span className="brand-mark" aria-hidden />Mini Chat</span>
+        <span className="brand"><span className="brand-mark" aria-hidden />Memo Chat</span>
       </nav>
       <main className="login-main">
         <section>
@@ -41,7 +41,7 @@ export default function Login() {
             Answers that <span className="accent">remember</span> what you asked
           </h1>
           <p className="lede">
-            Mini Chat recalls your past conversations by date, rechecks the live web, and tells you what changed since. Your history is private to your account.
+            Memo Chat recalls your past conversations by date, rechecks the live web, and tells you what changed since. Your history is private to your account.
           </p>
 
           {mode === "oidc" && (

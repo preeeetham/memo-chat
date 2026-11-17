@@ -16,21 +16,21 @@ pg.types.setTypeParser(20, (v) => Number(v)); // bigint counts
 
 type Ctx = { userId: string; client?: pg.PoolClient };
 const als = new AsyncLocalStorage<Ctx>();
-const g = globalThis as unknown as { __minichatPool?: { url: string; pool: pg.Pool } };
+const g = globalThis as unknown as { __memochatPool?: { url: string; pool: pg.Pool } };
 
 export function pool(): pg.Pool {
   const url = config().databaseUrl;
-  if (g.__minichatPool?.url === url) return g.__minichatPool.pool;
-  void g.__minichatPool?.pool.end().catch(() => {});
+  if (g.__memochatPool?.url === url) return g.__memochatPool.pool;
+  void g.__memochatPool?.pool.end().catch(() => {});
   const p = new pg.Pool({ connectionString: url, max: Number(process.env.PG_POOL_MAX || 10), idleTimeoutMillis: 30_000 });
   p.on("error", (err) => console.warn("[db] idle client error", err.message));
-  g.__minichatPool = { url, pool: p };
+  g.__memochatPool = { url, pool: p };
   return p;
 }
 
 export async function closePool(): Promise<void> {
-  const p = g.__minichatPool?.pool;
-  g.__minichatPool = undefined;
+  const p = g.__memochatPool?.pool;
+  g.__memochatPool = undefined;
   await p?.end();
 }
 

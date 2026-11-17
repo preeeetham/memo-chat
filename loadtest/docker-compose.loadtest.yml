@@ -16,12 +16,12 @@ x-mock-env: &mock-env
   DAILY_TOKEN_BUDGET: "0"
   SEED_DEMO: "false"
   # A fixed "now" (Wednesday 11 Nov 2026, Kolkata) so "on Monday" and "last Tuesday" have one right answer.
-  MINICHAT_FAKE_NOW: 2026-11-11T14:05:00+05:30
+  MEMOCHAT_FAKE_NOW: 2026-11-11T14:05:00+05:30
   PG_POOL_MAX: "20"
 
 services:
   mock-llm:
-    image: mini-chat:local
+    image: memo-chat:local
     pull_policy: never
     command: ["node_modules/.bin/tsx", "loadtest/mock-llm.ts"]
     depends_on:

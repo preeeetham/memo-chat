@@ -12,8 +12,8 @@ const streamKey = (userId: string, turnId: string) => userKey(userId, "turn", tu
 const stopKey = (userId: string, turnId: string) => userKey(userId, "turn", turnId, "stop");
 
 /** In-process registry so a stop on the same instance is immediate. */
-const g = globalThis as unknown as { __minichatTurns?: Map<string, AbortController> };
-const running = (g.__minichatTurns ??= new Map());
+const g = globalThis as unknown as { __memochatTurns?: Map<string, AbortController> };
+const running = (g.__memochatTurns ??= new Map());
 
 export class TurnBuffer {
   private seq = 0;

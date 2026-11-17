@@ -18,7 +18,7 @@ describe("sessions", () => {
     const [h, p, s] = t.split(".");
     const forged = Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(p!, "base64url").toString()), sub: "dev|bob" })).toString("base64url");
     expect(await verifySession(`${h}.${forged}.${s}`)).toBeNull();
-    const other = await new SignJWT({}).setProtectedHeader({ alg: "HS256" }).setIssuer("mini-chat").setSubject("dev|bob").sign(new TextEncoder().encode("another-secret"));
+    const other = await new SignJWT({}).setProtectedHeader({ alg: "HS256" }).setIssuer("memo-chat").setSubject("dev|bob").sign(new TextEncoder().encode("another-secret"));
     expect(await verifySession(other)).toBeNull();
     expect(await verifySession("not-a-jwt")).toBeNull();
   });
@@ -64,12 +64,12 @@ describe("OIDC bearer tokens", () => {
     issuer = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     process.env.AUTH_MODE = "oidc";
     process.env.OIDC_ISSUER = issuer;
-    process.env.OIDC_CLIENT_ID = "mini-chat";
+    process.env.OIDC_CLIENT_ID = "memo-chat";
     sign = (claims, opts = {}) =>
       new SignJWT(claims)
         .setProtectedHeader({ alg: "RS256", kid: "k1" })
         .setIssuer(opts.iss ?? issuer)
-        .setAudience(opts.aud ?? "mini-chat")
+        .setAudience(opts.aud ?? "memo-chat")
         .setIssuedAt()
         .setExpirationTime("5m")
         .sign(privateKey);
@@ -95,7 +95,7 @@ describe("OIDC bearer tokens", () => {
 
   it("rejects a token signed by another key", async () => {
     const { privateKey } = await generateKeyPair("RS256");
-    const t = await new SignJWT({ sub: "u" }).setProtectedHeader({ alg: "RS256", kid: "k1" }).setIssuer(issuer).setAudience("mini-chat").setExpirationTime("5m").sign(privateKey);
+    const t = await new SignJWT({ sub: "u" }).setProtectedHeader({ alg: "RS256", kid: "k1" }).setIssuer(issuer).setAudience("memo-chat").setExpirationTime("5m").sign(privateKey);
     expect(await verifyProviderToken(t)).toBeNull();
   });
 });

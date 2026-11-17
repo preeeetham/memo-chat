@@ -8,15 +8,15 @@ import { z } from "zod";
 import { recordTokens } from "../budget";
 import { config } from "../config";
 
-const g = globalThis as unknown as { __minichatLlm?: { key: string; client: OpenAI } };
+const g = globalThis as unknown as { __memochatLlm?: { key: string; client: OpenAI } };
 
 export function llm(): OpenAI {
   const c = config().llm;
   const key = `${c.baseURL}|${c.apiKey}`;
-  if (g.__minichatLlm?.key !== key) {
-    g.__minichatLlm = { key, client: new OpenAI({ apiKey: c.apiKey, baseURL: c.baseURL, maxRetries: 3, timeout: 60_000 }) };
+  if (g.__memochatLlm?.key !== key) {
+    g.__memochatLlm = { key, client: new OpenAI({ apiKey: c.apiKey, baseURL: c.baseURL, maxRetries: 3, timeout: 60_000 }) };
   }
-  return g.__minichatLlm.client;
+  return g.__memochatLlm.client;
 }
 
 /** JSON Schema for response_format, from a zod schema. */

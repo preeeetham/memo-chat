@@ -7,7 +7,7 @@ import "dotenv/config";
 import pg from "pg";
 
 const BASE = process.env.SMOKE_URL || "http://localhost:3000";
-const ADMIN = process.env.SMOKE_ADMIN_DATABASE_URL || "postgres://postgres:postgres@localhost:5433/minichat";
+const ADMIN = process.env.SMOKE_ADMIN_DATABASE_URL || "postgres://postgres:postgres@localhost:5433/memochat";
 const run = `${Date.now().toString(36)}`;
 let failures = 0;
 

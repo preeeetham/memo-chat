@@ -8,13 +8,13 @@ import { writeFileSync } from "node:fs";
 import { z } from "zod";
 import { dropDatabase, ensureDatabase, migrate, withDatabase } from "../src/db/migrate";
 
-process.env.MINICHAT_FAKE_NOW ||= "2026-11-11T14:05:00+05:30"; // a Wednesday
+process.env.MEMOCHAT_FAKE_NOW ||= "2026-11-11T14:05:00+05:30"; // a Wednesday
 const TZ = process.env.EVAL_TZ || "Asia/Kolkata";
 
 // A throwaway database (same server) and Redis key prefix, so the eval never touches real data or caches.
-const evalDb = `minichat_eval_${Date.now()}`;
-const adminUrl = withDatabase(process.env.MIGRATE_DATABASE_URL || "postgres://postgres:postgres@localhost:5433/minichat", evalDb);
-process.env.DATABASE_URL = withDatabase(process.env.DATABASE_URL || "postgres://minichat_app:minichat_app@localhost:5433/minichat", evalDb);
+const evalDb = `memochat_eval_${Date.now()}`;
+const adminUrl = withDatabase(process.env.MIGRATE_DATABASE_URL || "postgres://postgres:postgres@localhost:5433/memochat", evalDb);
+process.env.DATABASE_URL = withDatabase(process.env.DATABASE_URL || "postgres://memochat_app:memochat_app@localhost:5433/memochat", evalDb);
 process.env.REDIS_PREFIX = `eval:${Date.now()}:`;
 process.env.DAILY_TOKEN_BUDGET = "0";
 await ensureDatabase(adminUrl);
@@ -137,7 +137,7 @@ async function ask(question: string): Promise<Run> {
   return { text, events, assistantId: start.assistantMessageId, ttft, total, searches };
 }
 
-console.log(`Seeding demo history (now = ${process.env.MINICHAT_FAKE_NOW}, tz = ${TZ})…`);
+console.log(`Seeding demo history (now = ${process.env.MEMOCHAT_FAKE_NOW}, tz = ${TZ})…`);
 await ensureUser({ id: EVAL_USER, name: "eval" }, "dev", "eval");
 await asUser(EVAL_USER, () => seedDemo(TZ));
 await drainAll(300_000);
@@ -184,7 +184,7 @@ for (const [i, s] of scenarios.entries()) {
 
 const report = `# Eval results
 
-Clock frozen at ${process.env.MINICHAT_FAKE_NOW} (${TZ}). Model: ${process.env.LLM_MODEL}. Search: ${process.env.SEARCH_PROVIDER || "exa"}. Run at ${new Date().toISOString()}.
+Clock frozen at ${process.env.MEMOCHAT_FAKE_NOW} (${TZ}). Model: ${process.env.LLM_MODEL}. Search: ${process.env.SEARCH_PROVIDER || "exa"}. Run at ${new Date().toISOString()}.
 
 **${passed}/${total} checks passed.**
 

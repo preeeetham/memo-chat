@@ -1,4 +1,4 @@
-# Mini Chat
+# Memo Chat
 
 A chat agent with one tool, web search, that remembers each user's past conversations. Ask it "Last Tuesday I asked you about Postgres hosting. Has any pricing changed since then?" and it works out which Tuesday you mean, finds what it told you then, re-checks the vendors' own pricing pages, and reports per item what changed, with sources and dates.
 
@@ -9,7 +9,7 @@ It is multi-user: sign-in (OIDC, or a dev login), Postgres with row-level securi
 Requires Docker.
 
 ```bash
-git clone https://github.com/preeeetham/mini-chat && cd mini-chat
+git clone https://github.com/preeeetham/memo-chat && cd memo-chat
 cp .env.example .env     # fill in LLM_API_KEY and EXA_API_KEY
 docker compose up --build
 ```
@@ -63,7 +63,7 @@ If Redis is down the app keeps working: caches are skipped, limits are counted p
 
 Sign in as `demo`, or open **demo tools** (bottom left) and click **Load demo history** to load it into your own account. That writes three backdated conversations, dated relative to today: a CRM shortlist last Monday, a Node.js question on 3 November, and Postgres hosting prices last Tuesday. They are marked `[demo]` and their contents are illustrative.
 
-You can also freeze the clock (demo tools, or `MINICHAT_FAKE_NOW` in `.env`) and load your own transcripts into your account:
+You can also freeze the clock (demo tools, or `MEMOCHAT_FAKE_NOW` in `.env`) and load your own transcripts into your account:
 
 ```bash
 TOKEN=$(curl -s -X POST localhost:3000/api/auth/dev-login -H 'content-type: application/json' -d '{"username":"alice"}' | node -pe 'JSON.parse(require("fs").readFileSync(0)).token')

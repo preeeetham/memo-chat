@@ -443,7 +443,7 @@ export default function Page() {
     <div className="app">
       <aside className={`sidebar${sidebarOpen ? " open" : ""}`}>
         <header>
-          <span className="brand"><span className="brand-mark" aria-hidden />Mini Chat</span>
+          <span className="brand"><span className="brand-mark" aria-hidden />Memo Chat</span>
           <button className="btn btn-ink" onClick={newChat}>New chat</button>
         </header>
         <nav className="conv-list">
@@ -512,7 +512,7 @@ export default function Page() {
         )}
         <div className="topbar">
           <button className="btn btn-line" onClick={() => setSidebarOpen((s) => !s)} aria-label="Show conversations">☰ Chats</button>
-          <span className="brand"><span className="brand-mark" aria-hidden />Mini Chat</span>
+          <span className="brand"><span className="brand-mark" aria-hidden />Memo Chat</span>
           <button className="btn btn-ink" onClick={newChat}>New</button>
         </div>
         <div className="messages" ref={scrollRef} onClick={() => sidebarOpen && setSidebarOpen(false)}>

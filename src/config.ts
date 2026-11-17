@@ -61,7 +61,7 @@ export function config(): Config {
       exaKey: env("EXA_API_KEY"),
       tavilyKey: env("TAVILY_API_KEY"),
     },
-    databaseUrl: env("DATABASE_URL") || "postgres://minichat_app:minichat_app@localhost:5433/minichat",
+    databaseUrl: env("DATABASE_URL") || "postgres://memochat_app:memochat_app@localhost:5433/memochat",
     redisUrl: env("REDIS_URL") || "redis://localhost:6380",
     redisPrefix: env("REDIS_PREFIX") || "mc:",
     auth: {
@@ -75,7 +75,7 @@ export function config(): Config {
     },
     budgets: { dailyTokens: num("DAILY_TOKEN_BUDGET", 300_000), requestsPerMinute: num("RATE_LIMIT_PER_MINUTE", 20) },
     demoTools: env("DEMO_TOOLS") !== "false",
-    fakeNow: env("MINICHAT_FAKE_NOW") || null,
+    fakeNow: env("MEMOCHAT_FAKE_NOW") || null,
     limits: {
       maxToolRounds: 4,
       resultsPerQuery: 5,

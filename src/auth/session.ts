@@ -6,7 +6,7 @@ import { jwtVerify, SignJWT } from "jose";
 import { config } from "../config";
 
 export const COOKIE = "mc_session";
-const ISSUER = "mini-chat";
+const ISSUER = "memo-chat";
 const TTL_SECONDS = 7 * 86_400;
 
 export type SessionUser = { id: string; name: string | null };

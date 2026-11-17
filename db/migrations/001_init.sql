@@ -1,4 +1,4 @@
--- Mini Chat, multi-user schema.
+-- Memo Chat, multi-user schema.
 --
 -- Every user-owned table leads with user_id, in its primary key and in its indexes, so one user's
 -- history is one contiguous index range (and, later, one shard). Row-level security is the tenant
