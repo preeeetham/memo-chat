@@ -18,8 +18,8 @@ function memIncr(k: string, by: number, ttlSec: number): number {
   return entry.n;
 }
 
-/** Atomic counter with expiry. */
-async function incr(k: string, by: number, ttlSec: number): Promise<number> {
+/** Atomic counter with expiry (shared across instances through Redis). */
+export async function incr(k: string, by: number, ttlSec: number): Promise<number> {
   const r = await soft(async (redis) => {
     const res = await redis.multi().incrby(k, by).expire(k, ttlSec, "NX").exec();
     return Number(res?.[0]?.[1] ?? NaN);

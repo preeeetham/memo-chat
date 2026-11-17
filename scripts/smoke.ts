@@ -16,8 +16,12 @@ function check(name: string, ok: boolean, detail = ""): void {
   if (!ok) failures++;
 }
 
+/** Dev sign-in when AUTH_MODE=dev; otherwise a fresh guest (AUTH_MODE=password). */
 async function login(username: string): Promise<string> {
-  const r = await fetch(`${BASE}/api/auth/dev-login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username }) });
+  const post = (path: string, body: unknown) =>
+    fetch(`${BASE}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  let r = await post("/api/auth/dev-login", { username });
+  if (r.status === 404) r = await post("/api/auth/guest", {});
   const body = (await r.json()) as { token?: string; error?: string };
   if (!body.token) throw new Error(`login ${username}: ${body.error ?? r.status}`);
   return body.token;

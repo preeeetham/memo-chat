@@ -10,7 +10,7 @@ export type Config = {
   redisUrl: string;
   redisPrefix: string;
   auth: {
-    mode: "dev" | "oidc";
+    mode: "dev" | "password" | "oidc";
     secret: string;
     oidcIssuer: string;
     oidcClientId: string;
@@ -65,7 +65,7 @@ export function config(): Config {
     redisUrl: env("REDIS_URL") || "redis://localhost:6380",
     redisPrefix: env("REDIS_PREFIX") || "mc:",
     auth: {
-      mode: env("AUTH_MODE") === "oidc" ? "oidc" : "dev",
+      mode: env("AUTH_MODE") === "oidc" ? "oidc" : env("AUTH_MODE") === "dev" ? "dev" : "password",
       secret: env("AUTH_SECRET") || DEV_SECRET,
       oidcIssuer: env("OIDC_ISSUER").replace(/\/$/, ""),
       oidcClientId: env("OIDC_CLIENT_ID"),
@@ -94,6 +94,8 @@ export function missingConfig(c: Config = config()): string[] {
   if (!c.llm.apiKey) problems.push("LLM_API_KEY is not set.");
   if (c.search.provider === "exa" && !c.search.exaKey) problems.push("EXA_API_KEY is not set (web search).");
   if (c.search.provider === "tavily" && !c.search.tavilyKey) problems.push("TAVILY_API_KEY is not set (web search).");
+  if (c.auth.mode === "password" && c.auth.secret === DEV_SECRET && c.auth.publicUrl.startsWith("https://"))
+    problems.push("AUTH_MODE=password needs a real AUTH_SECRET (e.g. `openssl rand -hex 32`).");
   if (c.auth.mode === "oidc") {
     if (!c.auth.oidcIssuer || !c.auth.oidcClientId) problems.push("AUTH_MODE=oidc needs OIDC_ISSUER and OIDC_CLIENT_ID.");
     if (c.auth.secret === DEV_SECRET) problems.push("AUTH_MODE=oidc needs a real AUTH_SECRET (e.g. `openssl rand -hex 32`).");

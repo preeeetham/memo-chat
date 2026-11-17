@@ -233,6 +233,13 @@ a.cite.mem { background: var(--blue-soft); color: var(--blue-ink); }
 .login .hint { font-size: 13px; color: var(--muted); max-width: 400px; margin-top: 4px; }
 .login .hint strong { color: var(--text-2); font-weight: 600; }
 .login .error { margin-top: 10px; }
+.login .auth { max-width: 400px; display: grid; gap: 10px; }
+.auth-tabs { display: flex; gap: 4px; padding: 4px; background: var(--card); border-radius: var(--radius); }
+.auth-tabs button { flex: 1; height: 38px; border: 0; border-radius: calc(var(--radius) - 3px); background: transparent; color: var(--text-2); font: inherit; font-size: 15px; cursor: pointer; }
+.auth-tabs button.on { background: var(--raised); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
+.auth-or { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 13px; }
+.auth-or::before, .auth-or::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.auth-guest { width: 100%; }
 .login-points { display: grid; gap: 4px; margin-top: 36px; max-width: 470px; }
 .login-points div { display: grid; grid-template-columns: 28px 1fr; font-size: 15px; color: var(--text-2); }
 .login-points b { font-weight: 600; color: var(--border-strong); }

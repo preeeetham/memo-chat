@@ -40,7 +40,8 @@ seed     one-shot: demo history for user "demo" (SEED_DEMO=false to skip)
 
 ## Sign-in
 
-- **`AUTH_MODE=dev`** (default): pick any username, no password. For local use only.
+- **`AUTH_MODE=password`** (default when unset): email + password accounts, plus **Continue as guest** (a private anonymous account that lives as long as that browser's session). Passwords are hashed with scrypt; sign-up, sign-in and guest creation are rate-limited per IP and per email. Set a real `AUTH_SECRET` and `PUBLIC_URL` (https makes the session cookie `Secure`).
+- **`AUTH_MODE=dev`**: pick any username, no password. For local use only; `docker compose` uses it so the `demo` user works.
 - **`AUTH_MODE=oidc`**: any OpenID Connect provider (Auth0, Okta, Cognito, Keycloak, Google, Entra, Clerk). Set `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` (if the client is confidential), `PUBLIC_URL`, and a real `AUTH_SECRET`; register `PUBLIC_URL/api/auth/callback` as the redirect URI. API clients can also send the provider's token as `Authorization: Bearer …`.
 
 For anything shared, also set `DEMO_TOOLS=false` (the demo clock is server-wide) and `SEED_DEMO=false`.

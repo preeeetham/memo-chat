@@ -532,7 +532,11 @@ export default function Page() {
                   </button>
                 ))}
               </div>
-              <div className="note">The recall examples need history: load the demo history from demo tools, or sign in as demo.</div>
+              <div className="note">
+                {settings?.demoTools
+                  ? "The recall examples need history: load the demo history from demo tools, or sign in as demo."
+                  : "The recall examples work once you have some history: chat for a bit, then ask about it later."}
+              </div>
             </div>
           ) : (
             <div className="thread">
