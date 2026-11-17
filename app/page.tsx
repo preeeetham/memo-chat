@@ -133,7 +133,9 @@ function localToday(nowIso: string | undefined): string {
 function linkCitations(text: string, m: Msg): string {
   const byRef = new Map(m.sources.map((s) => [s.ref, s]));
   const mem = new Map((m.memory?.recalled ?? []).map((r) => [r.ref, r]));
-  return text.replace(/\[((?:S|M)\d+)(?:\s*,\s*((?:S|M)\d+))*\]/g, (all) => {
+  // Attach markers to the word before them and to each other: "price [S4] [S6] ." -> "price[S4][S6]."
+  const tight = text.replace(/[ \t]+(?=\[(?:S|M)\d+(?:\s*,\s*(?:S|M)\d+)*\])/g, "").replace(/(\[(?:S|M)\d+(?:\s*,\s*(?:S|M)\d+)*\])[ \t]+(?=[.,;:!?)])/g, "$1");
+  return tight.replace(/\[((?:S|M)\d+)(?:\s*,\s*((?:S|M)\d+))*\]/g, (all) => {
     const refs = all.slice(1, -1).split(/\s*,\s*/);
     return refs
       .map((ref) => {
@@ -143,7 +145,7 @@ function linkCitations(text: string, m: Msg): string {
         if (r) return `[${ref}](#conv:${r.conversation_id} "cite")`;
         return `[${ref}]`;
       })
-      .join(" ");
+      .join(""); // adjacent markers: spacing comes from CSS, so they stay tight
   });
 }
 
