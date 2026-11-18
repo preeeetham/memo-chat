@@ -195,7 +195,21 @@ export default function Page() {
   const [collapsed, setCollapsed] = useState(false); // desktop: sidebar hidden (remembered per browser)
   const [sidebarW, setSidebarW] = useState(SIDEBAR_DEFAULT); // desktop width in px, drag the edge to change
   const [resizing, setResizing] = useState(false);
+  const [menuFor, setMenuFor] = useState<string | null>(null); // chat whose "more" menu is open
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null); // chat awaiting delete confirmation
   const [searching, setSearching] = useState(false);
+  // Close the chat options menu on any click outside it, or Escape.
+  useEffect(() => {
+    if (!menuFor) return;
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent && e.key !== "Escape") return;
+      if (e.target instanceof Element && e.target.closest(".conv-menu, button.more")) return;
+      setMenuFor(null);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", close);
+    return () => (document.removeEventListener("mousedown", close), document.removeEventListener("keydown", close));
+  }, [menuFor]);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Array<Conv & { snippet?: string | null }> | null>(null);
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
@@ -637,12 +651,29 @@ export default function Page() {
             <div key={g.label}>
               <div className="group-label">{g.label}</div>
               {g.items.map((c) => (
-                <div key={c.id} className={`conv${c.id === activeId ? " active" : ""}`}>
+                confirmDelete === c.id ? (
+                  <div key={c.id} className="conv-confirm" role="alertdialog" aria-label="Delete chat">
+                    <p>Delete “{c.title ?? "New chat"}”? The chat and anything Memo Chat remembered from it will be removed.</p>
+                    <div className="edit-actions">
+                      <button className="btn btn-line" onClick={() => setConfirmDelete(null)}>Cancel</button>
+                      <button className="btn btn-ink" onClick={() => (setConfirmDelete(null), void del(c.id))}>Delete</button>
+                    </div>
+                  </div>
+                ) : (
+                <div key={c.id} className={`conv${c.id === activeId ? " active" : ""}${menuFor === c.id ? " menu-open" : ""}`}>
                   <button className="open" title={c.title ?? ""} onClick={() => void openConv(c.id)}>
                     {c.title ?? "New chat"}
                   </button>
-                  <button className="del" aria-label="Delete conversation" onClick={() => void del(c.id)}>×</button>
+                  <button className="more" aria-label="Chat options" aria-haspopup="menu" aria-expanded={menuFor === c.id} onClick={() => setMenuFor(menuFor === c.id ? null : c.id)}>
+                    ⋯
+                  </button>
+                  {menuFor === c.id && (
+                    <div className="conv-menu" role="menu">
+                      <button role="menuitem" onClick={() => (setMenuFor(null), setConfirmDelete(c.id))}>Delete chat…</button>
+                    </div>
+                  )}
                 </div>
+                )
               ))}
             </div>
           ))}
