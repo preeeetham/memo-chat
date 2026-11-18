@@ -181,7 +181,7 @@ a { color: inherit; }
 .verdict.same { background: var(--green-soft); color: var(--green-ink); }
 .verdict.unknown { background: var(--grey-soft); color: var(--muted); }
 /* Citations: small plain links, readable inline, not bold or boxed. */
-a.cite { font-size: 0.72em; font-weight: 400; color: var(--muted); text-decoration: none; position: relative; top: -0.45em; vertical-align: baseline; line-height: 1; margin-left: 0.2em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+a.cite { font-size: 0.82em; font-weight: 400; color: var(--muted); text-decoration: none; vertical-align: baseline; margin-left: 0.25em; font-variant-numeric: tabular-nums; white-space: nowrap; }
 a.cite:hover { color: var(--orange-ink); text-decoration: underline; }
 a.cite.mem { color: var(--blue-ink); }
 .verdict a.cite { background: transparent; padding: 0 0 0 2px; color: inherit; }

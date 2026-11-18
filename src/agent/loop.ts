@@ -66,7 +66,8 @@ export async function runLoop(opts: {
           stream: true,
           stream_options: { include_usage: true },
           reasoning_effort: opts.effort,
-          max_completion_tokens: 8000,
+          // Gemini counts its thinking tokens here too, so leave room for long answers after a search.
+          max_completion_tokens: 16000,
           ...(toolsAllowed ? { tools: [webSearchTool], tool_choice: "auto" as const } : {}),
         },
         { signal: opts.signal },

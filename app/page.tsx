@@ -242,7 +242,12 @@ export default function Page() {
     const asst: Msg = { id: `tmp-a-${Date.now()}`, role: "assistant", text: "", sources: [], memory: null };
     setMessages((m) => [...m, userMsg, asst]);
     let curId = asst.id; // becomes the server's id when the turn is done
-    const update = (fn: (a: Msg) => Msg) => setMessages((ms) => ms.map((x) => (x.id === curId ? fn(x) : x)));
+    // Capture the id when the update is queued: React runs updaters later, after curId may have
+    // changed to the server's id, and an updater reading curId then would match nothing (stuck answer).
+    const update = (fn: (a: Msg) => Msg) => {
+      const id = curId;
+      setMessages((ms) => ms.map((x) => (x.id === id ? fn(x) : x)));
+    };
 
     // Smooth streaming: the model sends text in bursts; reveal it at a steady pace instead.
     // Each frame shows a slice of what has arrived but isn't on screen yet, so bursts flow in

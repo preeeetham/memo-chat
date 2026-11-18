@@ -96,7 +96,11 @@ export async function runTurn(input: TurnInput, emit: (e: ChatEvent) => void, si
     answer = "Sorry, I couldn't produce an answer for that. Could you rephrase or try again?";
     emit({ type: "text", delta: answer });
   }
-  if (result.finishReason === "length") answer += "\n\n_(Answer cut short: it hit the length limit.)_";
+  if (result.finishReason === "length" || result.finishReason === "max_tokens") {
+    const cut = "\n\n_(Answer cut short: it hit the length limit.)_";
+    answer += cut;
+    emit({ type: "text", delta: cut }); // show it live too, not only after a reload
+  }
   if (result.finishReason === "content_filter") answer = "I can't help with that one.";
 
   // 6. Persist the answer and its extraction job in one transaction (the outbox).
@@ -130,7 +134,7 @@ export async function runTurn(input: TurnInput, emit: (e: ChatEvent) => void, si
     title = text.length > 60 ? `${text.slice(0, 57)}…` : text;
     await setConversationTitle(conv.id, title);
   }
-  console.log(`[turn] ${p.task}/${p.source} memory=${bundle.status} rounds=${result.rounds} searches=${result.searches} ` + Object.entries(timings).map(([k, v]) => `${k}=${v}ms`).join(" "));
+  console.log(`[turn] ${p.task}/${p.source} memory=${bundle.status} rounds=${result.rounds} searches=${result.searches} finish=${result.finishReason} chars=${answer.length} ` + Object.entries(timings).map(([k, v]) => `${k}=${v}ms`).join(" "));
   emit({ type: "done", assistantMessageId: assistantId, timings, title });
 
   // 7. Extraction runs after the response, in the worker. Publishing is best effort; the worker's sweep covers a miss.
