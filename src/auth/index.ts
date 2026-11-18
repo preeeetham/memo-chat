@@ -47,7 +47,8 @@ export async function withUser(req: Request, fn: (user: SessionUser) => Promise<
   if (!user) return unauthorized();
   const [issuer, ...rest] = user.id.split("|");
   const local = issuer === "dev" || issuer === "pw" || issuer === "guest";
-  await ensureUser(user, local ? issuer! : config().auth.oidcIssuer || issuer!, rest.join("|") || user.id);
+  const iss = issuer === "fb" ? "firebase" : local ? issuer! : config().auth.oidcIssuer || issuer!;
+  await ensureUser(user, iss, rest.join("|") || user.id);
   return asUser(user.id, () => fn(user));
 }
 
