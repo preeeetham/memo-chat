@@ -87,6 +87,36 @@ a { color: inherit; }
 .sidebar { background: var(--bg); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
 .sidebar header { padding: 18px 16px 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .sidebar header .btn { height: 34px; padding: 0 12px; font-size: 14px; }
+.sidebar-actions { display: flex; align-items: center; gap: 2px; }
+.icon-btn.on { background: var(--card); color: var(--text); }
+.sidebar-search { padding: 0 12px 8px; }
+.sidebar-search input { width: 100%; height: 36px; padding: 0 12px; border-radius: var(--radius); border: 1px solid var(--border-strong); background: var(--raised); color: var(--text); font: inherit; font-size: 14px; outline: none; }
+.sidebar-search input:focus { border-color: var(--ink); }
+.new-chat-row { display: flex; align-items: center; gap: 10px; margin: 0 10px 8px; padding: 9px 10px; border: 0; border-radius: var(--radius); background: transparent; color: var(--text); font: inherit; font-size: 14px; font-weight: 500; cursor: pointer; text-align: left; }
+.new-chat-row:hover { background: var(--card); }
+.conv .open .conv-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv .open .conv-snippet { display: block; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+.icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border: 0; border-radius: var(--radius); background: transparent; color: var(--muted); cursor: pointer; }
+.icon-btn:hover { background: var(--card); color: var(--text); }
+.app.collapsed { grid-template-columns: 0 1fr; }
+.app.collapsed .sidebar { visibility: hidden; overflow: hidden; border-right: 0; }
+.main { position: relative; }
+.collapsed-actions { position: absolute; top: 14px; left: 14px; z-index: 5; display: flex; gap: 4px; }
+.sidebar header .brand { white-space: nowrap; }
+/* Editing a sent message */
+.msg.user { position: relative; }
+.msg-edit { position: absolute; left: -38px; top: 50%; transform: translateY(-50%); width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer; opacity: 0; transition: opacity .15s; }
+.msg.user:hover .msg-edit, .msg-edit:focus-visible { opacity: 1; }
+.msg-edit:hover { background: var(--card); color: var(--text); }
+@media (hover: none) { .msg-edit { opacity: .7; } }
+.msg.user:has(.edit-box) { width: min(100%, 620px); padding: 10px; }
+.edit-box { display: grid; gap: 10px; }
+.edit-box textarea { width: 100%; resize: vertical; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--raised); color: var(--text); font: inherit; padding: 10px 12px; outline: none; }
+.edit-box textarea:focus { border-color: var(--ink); }
+.edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.edit-actions .btn { height: 34px; padding: 0 14px; font-size: 14px; }
+.edit-confirm { display: grid; gap: 10px; padding: 12px 14px; border-radius: var(--radius); background: var(--raised); border: 1px solid var(--border-strong); }
+.edit-confirm p { margin: 0; font-size: 14px; color: var(--text-2); line-height: 1.45; }
 .conv-list { overflow-y: auto; flex: 1; padding: 0 10px 12px; }
 .group-label { font-size: 12px; font-weight: 500; color: var(--muted); margin: 18px 8px 6px; text-transform: uppercase; letter-spacing: 0.06em; }
 .conv { display: flex; align-items: center; border-radius: var(--radius); }
@@ -261,6 +291,10 @@ a.cite.mem { color: var(--blue-ink); }
 @media (max-width: 760px) {
   .app { grid-template-columns: 1fr; }
   .sidebar { display: none; }
+  .app.collapsed { grid-template-columns: 1fr; }
+  .app.collapsed .sidebar.open { visibility: visible; }
+  .collapse-btn, .collapsed-actions { display: none; }
+  .msg-edit { left: -32px; }
   .sidebar.open { display: flex; position: fixed; inset: 0 18% 0 0; z-index: 20; box-shadow: 0 0 0 100vmax rgba(0,0,0,.25); }
   .topbar { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); }
   .topbar .btn { height: 34px; padding: 0 12px; font-size: 14px; }

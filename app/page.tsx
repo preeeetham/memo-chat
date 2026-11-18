@@ -149,6 +149,33 @@ function linkCitations(text: string, m: Msg): string {
   });
 }
 
+function PanelIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="3" y="4" width="18" height="16" rx="3" />
+      <path d="M9 4v16" />
+    </svg>
+  );
+}
+
+function SearchIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
+    </svg>
+  );
+}
+
+function PencilIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+  );
+}
+
 export default function Page() {
   const [convs, setConvs] = useState<Conv[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -160,6 +187,12 @@ export default function Page() {
   const [showSettings, setShowSettings] = useState(false);
   const [fakeNowInput, setFakeNowInput] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false); // desktop: sidebar hidden (remembered per browser)
+  const [searching, setSearching] = useState(false);
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<Array<Conv & { snippet?: string | null }> | null>(null);
+  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
+  const [confirmEdit, setConfirmEdit] = useState<{ id: string; text: string; count: number } | null>(null);
   const [welcome, setWelcome] = useState(false);
   const [nameInput, setNameInput] = useState("");
   const [userTz, setUserTz] = useState("");
@@ -190,6 +223,34 @@ export default function Page() {
     setActiveId(id);
     setMessages(r.messages);
   }, []);
+
+  useEffect(() => {
+    try {
+      setCollapsed(localStorage.getItem("mc.sidebarCollapsed") === "1");
+    } catch {}
+  }, []);
+  // Sidebar search: titles and message text, server-side (row-level security keeps it to this user).
+  useEffect(() => {
+    const q = query.trim();
+    if (!searching || !q) {
+      setResults(null);
+      return;
+    }
+    const t = setTimeout(async () => {
+      const r = await api(`/api/conversations?q=${encodeURIComponent(q)}`).then((x) => x.json());
+      setResults(r.conversations ?? []);
+    }, 200);
+    return () => clearTimeout(t);
+  }, [query, searching]);
+  const closeSearch = () => (setSearching(false), setQuery(""), setResults(null));
+
+  const toggleSidebar = () =>
+    setCollapsed((c) => {
+      try {
+        localStorage.setItem("mc.sidebarCollapsed", c ? "0" : "1");
+      } catch {}
+      return !c;
+    });
 
   useEffect(() => {
     void loadConvs();
@@ -231,7 +292,23 @@ export default function Page() {
     setSidebarOpen(false);
   }
 
-  async function send(text: string) {
+  /** Edit an earlier user message: everything from it onwards is replaced by the new answer. */
+  function saveEdit(id: string, text: string, confirmed = false) {
+    const t = text.trim();
+    const idx = messages.findIndex((x) => x.id === id);
+    if (!t || idx < 0 || busy) return;
+    const after = messages.length - idx - 1;
+    if (after > 0 && !confirmed) {
+      setConfirmEdit({ id, text: t, count: after });
+      return;
+    }
+    setConfirmEdit(null);
+    setEditing(null);
+    setMessages((ms) => ms.slice(0, idx));
+    void send(t, id);
+  }
+
+  async function send(text: string, editOf?: string) {
     const t = text.trim();
     if (!t || busy) return;
     setWelcome(false);
@@ -277,6 +354,8 @@ export default function Page() {
       if (seq) lastSeq = seq;
       if (e.type === "start") {
         turnRef.current = e.assistantMessageId;
+        const tmpUser = userMsg.id; // the server's id makes this message editable later
+        setMessages((ms) => ms.map((x) => (x.id === tmpUser ? { ...x, id: e.userMessageId } : x)));
         if (!activeRef.current) setActiveId(e.conversationId);
         activeRef.current = e.conversationId;
       } else if (e.type === "status") setStatus(e.text);
@@ -299,7 +378,7 @@ export default function Page() {
       const res = await api("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ conversationId: activeRef.current, text: t, tz: tz() }),
+        body: JSON.stringify({ conversationId: activeRef.current, text: t, tz: tz(), ...(editOf ? { editOf } : {}) }),
         signal: ctrl.signal,
       });
       if (!res.ok || !res.body) {
@@ -448,13 +527,50 @@ export default function Page() {
   }
 
   return (
-    <div className="app">
+    <div className={`app${collapsed ? " collapsed" : ""}`}>
       <aside className={`sidebar${sidebarOpen ? " open" : ""}`}>
         <header>
           <span className="brand"><span className="brand-mark" aria-hidden />Memo Chat</span>
-          <button className="btn btn-ink" onClick={newChat}>New chat</button>
+          <span className="sidebar-actions">
+            <button className={`icon-btn${searching ? " on" : ""}`} onClick={() => (searching ? closeSearch() : setSearching(true))} aria-label="Search chats" title="Search chats">
+              <SearchIcon />
+            </button>
+            <button className="icon-btn collapse-btn" onClick={toggleSidebar} aria-label="Hide chats" title="Hide chats">
+              <PanelIcon />
+            </button>
+          </span>
         </header>
+        {searching && (
+          <div className="sidebar-search">
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Escape" && closeSearch()}
+              placeholder="Search chats"
+              aria-label="Search chats"
+            />
+          </div>
+        )}
+        <button className="new-chat-row" onClick={() => (closeSearch(), newChat())}>
+          <PencilIcon />
+          <span>New chat</span>
+        </button>
         <nav className="conv-list">
+          {results !== null ? (
+            <div>
+              <div className="group-label">{results.length ? `Results for “${query.trim()}”` : `No chats match “${query.trim()}”`}</div>
+              {results.map((c) => (
+                <div key={c.id} className={`conv${c.id === activeId ? " active" : ""}`}>
+                  <button className="open" title={c.title ?? ""} onClick={() => void openConv(c.id)}>
+                    <span className="conv-title">{c.title ?? "New chat"}</span>
+                    {c.snippet && <span className="conv-snippet">{c.snippet.slice(0, 90)}</span>}
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <>
           {convs.length === 0 && <div className="conv-empty">No conversations yet.</div>}
           {groups.map((g) => (
             <div key={g.label}>
@@ -469,6 +585,8 @@ export default function Page() {
               ))}
             </div>
           ))}
+            </>
+          )}
         </nav>
         <footer>
           {settings && (
@@ -513,6 +631,16 @@ export default function Page() {
       </aside>
 
       <main className="main">
+        {collapsed && (
+          <div className="collapsed-actions">
+            <button className="icon-btn" onClick={toggleSidebar} aria-label="Show chats" title="Show chats">
+              <PanelIcon />
+            </button>
+            <button className="icon-btn" onClick={newChat} aria-label="New chat" title="New chat">
+              <PencilIcon />
+            </button>
+          </div>
+        )}
         {settings && settings.problems.length > 0 && (
           <div className="banner">
             Setup needed: {settings.problems.join(" ")} Copy <code>.env.example</code> to <code>.env</code>, fill it in, and restart (<code>docker compose up</code> or <code>npm run dev</code>).
@@ -564,7 +692,47 @@ export default function Page() {
               {messages.map((m, idx) => (
                 <div key={m.id} className={`msg ${m.role}`}>
                   {m.role === "user" ? (
-                    m.text
+                    editing?.id === m.id ? (
+                      <form className="edit-box" onSubmit={(e) => (e.preventDefault(), saveEdit(m.id, editing.text))}>
+                        <textarea
+                          autoFocus
+                          value={editing.text}
+                          rows={Math.min(8, Math.max(2, editing.text.split("\n").length))}
+                          onChange={(e) => (setEditing({ id: m.id, text: e.target.value }), setConfirmEdit(null))}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && !e.shiftKey) (e.preventDefault(), saveEdit(m.id, editing.text));
+                            if (e.key === "Escape") (setEditing(null), setConfirmEdit(null));
+                          }}
+                          aria-label="Edit message"
+                        />
+                        {confirmEdit?.id === m.id ? (
+                          <div className="edit-confirm" role="alertdialog" aria-label="Confirm edit">
+                            <p>
+                              Editing this message will remove the {confirmEdit.count} {confirmEdit.count === 1 ? "message" : "messages"} after it in this chat,
+                              along with anything Memo Chat remembered from them. This can&apos;t be undone.
+                            </p>
+                            <div className="edit-actions">
+                              <button type="button" className="btn btn-line" onClick={() => setConfirmEdit(null)}>Keep editing</button>
+                              <button type="button" className="btn btn-ink" onClick={() => saveEdit(m.id, confirmEdit.text, true)}>Remove and resend</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="edit-actions">
+                            <button type="button" className="btn btn-line" onClick={() => (setEditing(null), setConfirmEdit(null))}>Cancel</button>
+                            <button type="submit" className="btn btn-ink" disabled={!editing.text.trim() || busy}>Send</button>
+                          </div>
+                        )}
+                      </form>
+                    ) : (
+                      <>
+                        {m.text}
+                        {!m.id.startsWith("tmp-") && !busy && (
+                          <button className="msg-edit" onClick={() => (setEditing({ id: m.id, text: m.text }), setConfirmEdit(null))} aria-label="Edit message" title="Edit message">
+                            <PencilIcon />
+                          </button>
+                        )}
+                      </>
+                    )
                   ) : (
                     <>
                       {renderContext(m)}

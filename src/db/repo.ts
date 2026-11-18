@@ -108,6 +108,20 @@ export async function getConversation(id: string): Promise<ConversationRow | und
   return (await q<ConversationRow>(`SELECT ${CONV_COLS} FROM conversations WHERE id = $1`, [id]))[0];
 }
 
+/** Sidebar search: this user's chats whose title or any message contains the text (case-insensitive). */
+export async function searchConversations(text: string): Promise<Array<ConversationRow & { snippet: string | null }>> {
+  const like = `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+  return q(
+    `SELECT c.id, c.title, c.created_at, c.updated_at,
+            (SELECT m.text FROM messages m WHERE m.conversation_id = c.id AND m.text ILIKE $1 ORDER BY m.created_at DESC LIMIT 1) AS snippet
+       FROM conversations c
+      WHERE c.title ILIKE $1 OR EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.text ILIKE $1)
+      ORDER BY c.updated_at DESC
+      LIMIT 50`,
+    [like],
+  );
+}
+
 export async function listConversations(): Promise<Array<ConversationRow & { last_local_date: string | null }>> {
   return q(
     `SELECT c.id, c.title, c.created_at, c.updated_at,
@@ -132,6 +146,30 @@ export async function deleteConversation(id: string): Promise<boolean> {
     }
     const deleted = await run("DELETE FROM conversations WHERE id = $1 RETURNING id", [id]); // cascades to messages
     return deleted.length > 0;
+  });
+}
+
+/**
+ * Edit support: remove a user message and everything after it in its conversation, plus all memory
+ * derived from the removed answers (digests and vectors, claims, search calls and page evidence) and
+ * any extraction still queued for them. Messages go first so an extraction that is saving right now
+ * either commits before (and is then removed here) or finds its message gone (see saveExtraction).
+ * Returns the number of messages removed, or null if the message is not this user's, in this chat.
+ */
+export async function truncateFrom(conversationId: string, userMessageId: string): Promise<number | null> {
+  return tx(async (run) => {
+    const target = (await run<{ seq: string }>("SELECT seq FROM messages WHERE id = $1 AND conversation_id = $2 AND role = 'user'", [userMessageId, conversationId]))[0];
+    if (!target) return null;
+    const removed = await run<{ id: string; role: string }>("DELETE FROM messages WHERE conversation_id = $1 AND seq >= $2 RETURNING id, role", [conversationId, target.seq]);
+    const ids = removed.filter((m) => m.role === "assistant").map((m) => m.id);
+    if (ids.length) {
+      await run("DELETE FROM claims WHERE assistant_message_id = ANY($1)", [ids]);
+      await run("DELETE FROM turn_digests WHERE assistant_message_id = ANY($1)", [ids]);
+      await run("DELETE FROM search_calls WHERE assistant_message_id = ANY($1)", [ids]); // cascades to web_evidence
+      await run("UPDATE jobs SET status = 'skipped' WHERE user_id = $1 AND status = 'pending' AND payload->>'assistantMessageId' = ANY($2)", [currentUserId(), ids]);
+    }
+    await run("UPDATE conversations SET updated_at = now() WHERE id = $1", [conversationId]);
+    return removed.length;
   });
 }
 
@@ -311,6 +349,9 @@ export async function saveExtraction(
   embedding: number[] | null = null,
 ): Promise<void> {
   await tx(async (run) => {
+    // The turn may have been removed by an edit while the model was extracting: then save nothing.
+    // FOR SHARE makes a concurrent edit wait for this save, so it removes these rows too.
+    if (!(await run("SELECT 1 FROM messages WHERE id = $1 FOR SHARE", [turn.assistantId])).length) return;
     // Idempotent: a retried job replaces its own rows.
     await run("DELETE FROM claims WHERE assistant_message_id = $1", [turn.assistantId]);
     await run(

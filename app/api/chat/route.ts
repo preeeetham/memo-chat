@@ -2,6 +2,7 @@ import { z } from "zod";
 import { runTurn } from "../../../src/agent/turn";
 import { withUser } from "../../../src/auth";
 import { admitTurn } from "../../../src/budget";
+import { truncateFrom } from "../../../src/db/repo";
 import { missingConfig } from "../../../src/config";
 import { encodeEvent, type ChatEvent } from "../../../src/sse";
 import { TurnBuffer } from "../../../src/stream";
@@ -13,6 +14,8 @@ const Body = z.object({
   conversationId: z.string().nullable().optional(),
   text: z.string().min(1).max(8000),
   tz: z.string().optional(),
+  // Edit: replace this earlier user message (and everything after it) with `text`.
+  editOf: z.string().optional(),
 });
 
 /**
@@ -28,6 +31,12 @@ export async function POST(req: Request): Promise<Response> {
     if (problems.length) return Response.json({ error: problems.join(" ") }, { status: 503 });
     const admission = await admitTurn(user.id);
     if (!admission.ok) return Response.json({ error: admission.message }, { status: admission.status, headers: { "retry-after": String(admission.retryAfterSec) } });
+
+    if (parsed.data.editOf) {
+      if (!parsed.data.conversationId) return Response.json({ error: "Editing needs the conversation id." }, { status: 400 });
+      const removed = await truncateFrom(parsed.data.conversationId, parsed.data.editOf);
+      if (removed === null) return Response.json({ error: "That message can't be edited (not found in this chat)." }, { status: 404 });
+    }
 
     const encoder = new TextEncoder();
     const abort = new AbortController();

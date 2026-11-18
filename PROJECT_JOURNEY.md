@@ -312,6 +312,12 @@ Testing found a real recall miss. In a new chat, "who were we discussing this mo
 
 New tests cover cross-chat recall by time, just after midnight, and the empty-day fallback. On the live site the same two questions now answer from memory ("earlier today… [M1]") and say so when asked how.
 
+### 3.14 Editing sent messages, chat search, collapsible sidebar (18 Nov)
+
+**Editing:** an edited message replaces itself and everything after it in that chat (truncate and regenerate), rather than keeping branches. Branching would leave old answers in memory that the user thinks they removed, and recall could still surface them in other chats. Truncation keeps one history and one memory. In one transaction the server deletes the message and every later message, plus everything derived from the removed answers: summaries and their vectors, claims, search calls and page evidence, and queued extraction jobs. An extraction already running when the edit lands finds its message gone and saves nothing. Before anything is removed, the user sees a plain notice of how many messages will go, and confirms.
+
+**Sidebar:** a collapse button (remembered per browser), a search button that searches the user's chats by title and message text (row-level security keeps it to their own), and a "New chat" row under the header.
+
 ---
 
 ## 4. Where we are now
