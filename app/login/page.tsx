@@ -85,9 +85,11 @@ export default function Login() {
           ? null
           : code === "auth/account-exists-with-different-credential"
             ? "This email is already used with the other provider. Sign in with that one instead."
-            : code === "auth/popup-blocked"
+            : code === "auth/unauthorized-domain"
+              ? "Google/GitHub sign-in isn't enabled for this website yet (Firebase authorized domains)."
+              : code === "auth/popup-blocked"
               ? "Your browser blocked the sign-in popup. Allow popups for this site and try again."
-              : "Sign-in failed. Please try again.",
+              : `Sign-in failed (${code || "unknown error"}). Please try again.`,
       );
       setBusy(false);
     }
