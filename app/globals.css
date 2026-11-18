@@ -78,8 +78,8 @@ a { color: inherit; }
 
 /* Brand mark: a simple dot, no borrowed logo. */
 .brand { display: inline-flex; align-items: center; gap: 9px; font-weight: 600; font-size: 18px; letter-spacing: -0.01em; }
-.brand-mark { width: 22px; height: 22px; border-radius: 7px; background: var(--ink); position: relative; flex: none; }
-.brand-mark::after { content: ""; position: absolute; width: 8px; height: 8px; border-radius: 50%; background: var(--orange); right: 4px; top: 4px; }
+/* One logo everywhere: the same SVG as the browser tab icon (app/icon.svg), in light and dark mode. */
+.brand-mark { width: 22px; height: 22px; background: url("/icon.svg") center / contain no-repeat; flex: none; display: inline-block; }
 .accent { color: var(--orange); }
 
 /* Layout */
@@ -137,8 +137,11 @@ a { color: inherit; }
 .welcome-name input:focus { border-color: var(--ink); }
 .welcome-foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 20px; font-size: 13px; }
 .empty.quiet { height: 100%; margin: 0 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding-bottom: 8vh; }
-.empty.quiet .brand-mark { width: 36px; height: 36px; border-radius: 11px; }
-.empty.quiet .brand-mark::after { width: 12px; height: 12px; right: 6px; top: 6px; }
+.empty.quiet .brand-mark { width: 40px; height: 40px; }
+@media (prefers-color-scheme: dark) {
+  /* The logo is black; a faint ring keeps its edge visible on the dark background. */
+  .brand-mark { border-radius: 25%; box-shadow: 0 0 0 1px rgba(255, 255, 255, .22); }
+}
 .empty.quiet p { margin: -6px 0 0; font-size: 16px; }
 .empty.quiet h2 { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -0.01em; }
 
