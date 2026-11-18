@@ -55,21 +55,33 @@ export async function verifyFirebaseToken(
  * account signs in to that same account (same history and name). Otherwise the user is fb|<uid>,
  * created on first sign-in with their provider name as the greeting name.
  */
-export async function userForFirebase(id: FirebaseIdentity): Promise<SessionUser> {
+export async function userForFirebase(id: FirebaseIdentity, username: string | null = null): Promise<SessionUser> {
+  // Greeting name: the provider's display name (first word), else the GitHub username.
+  const first = id.name?.trim().split(/\s+/)[0]?.slice(0, 40) || username?.trim().slice(0, 40) || null;
   if (id.email && id.emailVerified) {
     const linked = (await sys<{ user_id: string }>("SELECT user_id FROM password_accounts WHERE email = $1", [id.email]))[0];
-    if (linked) return { id: linked.user_id, name: id.name ?? id.email.split("@")[0]! };
+    if (linked) {
+      // Fill in a greeting name only if the account doesn't have one yet.
+      if (first) await asUser(linked.user_id, () => tx((q) => q("UPDATE users SET preferred_name = COALESCE(preferred_name, $1)", [first])));
+      return { id: linked.user_id, name: id.name ?? first ?? id.email.split("@")[0]! };
+    }
   }
   const userId = `fb|${id.uid}`;
-  const first = id.name?.trim().split(/\s+/)[0]?.slice(0, 40) || null;
   await asUser(userId, () =>
     tx((q) =>
       q(
         `INSERT INTO users (id, issuer, subject, display_name, email, preferred_name) VALUES ($1, 'firebase', $2, $3, $4, $5)
-         ON CONFLICT (id) DO UPDATE SET email = COALESCE(EXCLUDED.email, users.email), last_seen_at = now()`,
+         ON CONFLICT (id) DO UPDATE SET email = COALESCE(EXCLUDED.email, users.email),
+           preferred_name = COALESCE(users.preferred_name, EXCLUDED.preferred_name), last_seen_at = now()`,
         [userId, id.uid, id.name, id.email, first],
       ),
     ),
   );
   return { id: userId, name: id.name ?? first };
+}
+
+/** Clean a provider username sent by the browser (display only, never used for identity). */
+export function cleanUsername(u: unknown): string | null {
+  const s = typeof u === "string" ? u.trim() : "";
+  return /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(s) ? s : null;
 }

@@ -69,15 +69,16 @@ export default function Login() {
     setError(null);
     try {
       const { initializeApp, getApps } = await import("firebase/app");
-      const { getAuth, signInWithPopup, signOut, GoogleAuthProvider, GithubAuthProvider } = await import("firebase/auth");
+      const { getAuth, signInWithPopup, signOut, getAdditionalUserInfo, GoogleAuthProvider, GithubAuthProvider } = await import("firebase/auth");
       const app = getApps()[0] ?? initializeApp(firebase);
       const auth = getAuth(app);
       const p = provider === "google" ? new GoogleAuthProvider() : new GithubAuthProvider();
       if (provider === "github") p.addScope("user:email");
       const cred = await signInWithPopup(auth, p);
       const idToken = await cred.user.getIdToken();
+      const username = getAdditionalUserInfo(cred)?.username ?? null; // GitHub login, used when there is no display name
       await signOut(auth).catch(() => {}); // our own session cookie takes over from here
-      await post("/api/auth/firebase", { idToken });
+      await post("/api/auth/firebase", { idToken, username });
     } catch (err) {
       const code = (err as { code?: string }).code ?? "";
       setError(

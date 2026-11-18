@@ -38,6 +38,22 @@ describe.skipIf(!available)("Firebase sign-in accounts", () => {
     expect(u.id).toBe("fb|gh-1");
   });
 
+  it("GitHub without a display name is greeted by their username", async () => {
+    const u = await fb.userForFirebase({ uid: "gh-2", email: null, emailVerified: false, name: null, provider: "github.com" }, fb.cleanUsername("preeeetham"));
+    expect(await db.asUser(u.id, () => repo.getPreferredName())).toBe("preeeetham");
+    expect(fb.cleanUsername("<script>")).toBeNull();
+  });
+
+  it("linking keeps a name the user already chose, and fills one in when missing", async () => {
+    await fb.userForFirebase({ uid: "g-1", email: "rishi@example.com", emailVerified: true, name: "Someone Else", provider: "google.com" });
+    expect(await db.asUser(emailUser, () => repo.getPreferredName())).toBe("Rishi");
+    const pw = await import("../../src/auth/password");
+    const up = await pw.signUp("noname@example.com", "a strong password");
+    if (!up.ok) throw new Error("sign-up failed");
+    await fb.userForFirebase({ uid: "g-3", email: "noname@example.com", emailVerified: true, name: "Meera Iyer", provider: "google.com" });
+    expect(await db.asUser(up.user.id, () => repo.getPreferredName())).toBe("Meera");
+  });
+
   it("a new provider user is created once, with their first name as the greeting name", async () => {
     const a = await fb.userForFirebase({ uid: "g-2", email: "asha@example.com", emailVerified: true, name: "Asha Rao", provider: "google.com" });
     const b = await fb.userForFirebase({ uid: "g-2", email: "asha@example.com", emailVerified: true, name: "Asha Rao", provider: "google.com" });

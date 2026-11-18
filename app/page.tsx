@@ -522,7 +522,7 @@ export default function Page() {
           {messages.length === 0 ? (
             welcome ? (
               <div className="empty welcome">
-                <h1>Welcome to Memo Chat</h1>
+                <h1>{greetName ? `Welcome, ${greetName}` : "Welcome to Memo Chat"}</h1>
                 <p className="lede">A research assistant that remembers your conversations and keeps its answers current.</p>
                 <div className="welcome-points">
                   {WELCOME_POINTS.map((p) => (
@@ -550,7 +550,8 @@ export default function Page() {
             ) : (
               <div className="empty quiet">
                 <span className="brand-mark" aria-hidden />
-                <h2>{greetName ? `How can I help you, ${greetName}?` : "How can I help?"}</h2>
+                <h2>{greetName ? `Welcome back, ${greetName}` : "Welcome back"}</h2>
+                <p className="muted">How can I help you today?</p>
               </div>
             )
           ) : (
