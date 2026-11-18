@@ -230,8 +230,8 @@ a.cite.mem { color: var(--blue-ink); }
 .auth-or { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 13px; }
 .auth-or::before, .auth-or::after { content: ""; flex: 1; height: 1px; background: var(--border); }
 .auth-guest { width: 100%; }
-.auth-social { display: grid; gap: 10px; }
-.auth-social .btn { gap: 10px; width: 100%; }
+.auth-social { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.auth-social .btn { width: 100%; padding: 0; }
 .login-points { display: grid; gap: 4px; margin-top: 36px; max-width: 470px; }
 .login-points div { display: grid; grid-template-columns: 28px 1fr; font-size: 15px; color: var(--text-2); }
 .login-points b { font-weight: 600; color: var(--border-strong); }
