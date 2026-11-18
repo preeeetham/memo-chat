@@ -158,6 +158,11 @@ function PanelIcon() {
   );
 }
 
+const SIDEBAR_DEFAULT = 280;
+const SIDEBAR_MIN = 240; // hard floor, about 86% of the default width
+const SIDEBAR_MAX = 480;
+const clampWidth = (w: number) => Math.round(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, w)));
+
 function SearchIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -188,6 +193,8 @@ export default function Page() {
   const [fakeNowInput, setFakeNowInput] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false); // desktop: sidebar hidden (remembered per browser)
+  const [sidebarW, setSidebarW] = useState(SIDEBAR_DEFAULT); // desktop width in px, drag the edge to change
+  const [resizing, setResizing] = useState(false);
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Array<Conv & { snippet?: string | null }> | null>(null);
@@ -227,8 +234,46 @@ export default function Page() {
   useEffect(() => {
     try {
       setCollapsed(localStorage.getItem("mc.sidebarCollapsed") === "1");
+      const w = Number(localStorage.getItem("mc.sidebarWidth"));
+      if (w) setSidebarW(clampWidth(w));
     } catch {}
   }, []);
+  const saveWidth = (w: number) => {
+    try {
+      localStorage.setItem("mc.sidebarWidth", String(w));
+    } catch {}
+  };
+  // Drag the sidebar's right edge: pointer capture keeps the drag going even over the chat area.
+  const startResize = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+    setResizing(true);
+    let last = sidebarW;
+    const move = (ev: PointerEvent) => {
+      last = clampWidth(ev.clientX);
+      setSidebarW(last);
+    };
+    const up = () => {
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      el.removeEventListener("pointercancel", up);
+      setResizing(false);
+      saveWidth(last);
+    };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+    el.addEventListener("pointercancel", up);
+  };
+  const resizeByKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = e.shiftKey ? 40 : 10;
+    const next = e.key === "ArrowLeft" ? sidebarW - step : e.key === "ArrowRight" ? sidebarW + step : null;
+    if (next === null) return;
+    e.preventDefault();
+    const w = clampWidth(next);
+    setSidebarW(w);
+    saveWidth(w);
+  };
   // Sidebar search: titles and message text, server-side (row-level security keeps it to this user).
   useEffect(() => {
     const q = query.trim();
@@ -527,8 +572,24 @@ export default function Page() {
   }
 
   return (
-    <div className={`app${collapsed ? " collapsed" : ""}`}>
+    <div className={`app${collapsed ? " collapsed" : ""}${resizing ? " resizing" : ""}`} style={{ "--sidebar-w": `${sidebarW}px` } as React.CSSProperties}>
       <aside className={`sidebar${sidebarOpen ? " open" : ""}`}>
+        {!collapsed && (
+          <div
+            className="sidebar-resizer"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize chats panel"
+            aria-valuemin={SIDEBAR_MIN}
+            aria-valuemax={SIDEBAR_MAX}
+            aria-valuenow={sidebarW}
+            tabIndex={0}
+            title="Drag to resize · double-click to reset"
+            onPointerDown={startResize}
+            onDoubleClick={() => (setSidebarW(SIDEBAR_DEFAULT), saveWidth(SIDEBAR_DEFAULT))}
+            onKeyDown={resizeByKey}
+          />
+        )}
         <header>
           <span className="brand"><span className="brand-mark" aria-hidden />Memo Chat</span>
           <span className="sidebar-actions">
