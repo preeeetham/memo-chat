@@ -53,6 +53,8 @@ const PRICE_ATTR = /price|pricing|cost|plan|tier|seat|fee|limit|quota/i;
  * vector side of hybrid recall adds no latency. Without it, the planner's keywords are embedded here.
  */
 export async function recall(p: Plan, resolutions: Resolution[], conversationId: string, queryEmbedding?: Promise<number[] | null>): Promise<EvidenceBundle> {
+  // Shown to the user as "Read as"; updated below when the topic matched a later candidate
+  // (e.g. "last Tuesday" on a Wednesday: yesterday had nothing, the Tuesday before did).
   const resolved = resolutions.map((r) => ({ expr: r.expr, date: rangeLabel(r.candidates[0]!) }));
   if (!p.needs_memory) return { status: "not_needed", resolved, turns: [] };
 
@@ -93,6 +95,10 @@ export async function recall(p: Plan, resolutions: Resolution[], conversationId:
       } else if (withMatches.length === 1) {
         chosen.push(...withMatches[0]!.matched.slice(0, MAX_TURNS_PER_DAY));
         const idx = perCandidate.indexOf(withMatches[0]!);
+        if (idx > 0) {
+          const k = resolutions.indexOf(r);
+          if (k >= 0) resolved[k] = { expr: r.expr, date: rangeLabel(withMatches[0]!.range) };
+        }
         if (idx > 0) note = `Matched "${r.expr}" to ${rangeLabel(withMatches[0]!.range)} (the more recent candidate had no matching conversation).`;
       } else {
         // No keyword match on the candidate days: widen by a day once.

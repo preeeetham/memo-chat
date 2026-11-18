@@ -65,6 +65,15 @@ describe.skipIf(!available)("cross-chat recall by time", () => {
     expect(b.turns[0]?.question).toMatch(/Nvidia/);
   });
 
+  it("'Read as' shows the day that actually matched, not the first candidate", async () => {
+    // Thu 19 Nov: "last Wednesday" could be 18 Nov (yesterday) or 11 Nov. Only 11 Nov has a chat.
+    const at = new Date("2026-11-19T06:00:00Z"); // Thu 19 Nov, 11:30 Kolkata
+    const p = { ...plan, time_expressions: ["last Wednesday"], topic_keywords: ["Nvidia", "CEO"] };
+    const b = await db.asUser(USER, () => recall(p, resolveAll(p.time_expressions, at, TZ), "c_new_chat"));
+    expect(b.status).toBe("found");
+    expect(b.resolved[0]?.date).toBe("2026-11-11");
+  });
+
   it("falls back to the adjacent day when the named day has no chats at all", async () => {
     const at = new Date("2026-11-12T03:00:00Z"); // Thu 12 Nov, 08:30 Kolkata: "today" is empty
     const b = await db.asUser(USER, () => recall({ ...plan, time_expressions: ["today"] }, resolveAll(["today"], at, TZ), "c_new_chat"));

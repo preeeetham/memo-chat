@@ -1,136 +1,343 @@
+<div align="center">
+
+<img src="app/icon.svg" width="72" height="72" alt="Memo Chat logo" />
+
 # Memo Chat
 
-A chat agent with one tool, web search, that remembers each user's past conversations. Ask it "Last Tuesday I asked you about Postgres hosting. Has any pricing changed since then?" and it works out which Tuesday you mean, finds what it told you then, re-checks the vendors' own pricing pages, and reports per item what changed, with sources and dates.
+**A research assistant that remembers what you asked, and checks whether it is still true.**
 
-It is multi-user: sign-in (OIDC, or a dev login), Postgres with row-level security per user, Redis for caches, limits and resumable streams, and a separate worker that indexes each turn after the reply. See [DESIGN.md](DESIGN.md) for how it works and why.
+[**Try it live → memo-chat.up.railway.app**](https://memo-chat.up.railway.app)
 
-## Quickstart
+</div>
 
-Requires Docker.
+Ask it *"Last Tuesday I asked you about Postgres hosting. Has any pricing changed since then?"* and Memo Chat works out which Tuesday you mean in your timezone, finds the conversation from that day (in any of your chats), re-checks the vendors' own pricing pages, and tells you item by item what **changed**, what is **still correct**, and what it **couldn't verify**, with sources and dates.
 
-```bash
-git clone https://github.com/preeeetham/memo-chat && cd memo-chat
-cp .env.example .env     # fill in LLM_API_KEY and EXA_API_KEY
-docker compose up --build
-```
+It has exactly one tool, web search. Memory is not a tool: it is plain SQL that runs before the model is called, so recall is fast, deterministic and testable.
 
-Open http://localhost:3000 and sign in as **demo** (dev sign-in, no password) to see three preloaded, backdated conversations. Then try the suggested questions. Sign in as any other name to get an empty, separate history.
+<p align="center">
+  <img src="docs/screenshot-recall.png" alt="Memo Chat answering a question about an earlier conversation: the date is resolved, the earlier chat is recalled, and the answer is rechecked live" width="900" />
+</p>
 
-`docker compose up` starts Postgres (with pgvector), Redis, runs the migrations, seeds the demo history (`SEED_DEMO=true`), and starts the app and the worker. Nothing else needs configuring.
+**What you get**
 
-Keys:
+- **Memory across all your chats.** "What did I ask you on 3 November?", "who were we discussing this morning?" Dates are resolved in code, in your timezone, and said back to you.
+- **Live answers with sources.** Parallel web searches with publish-date filters, primary sources first, inline citations you can click.
+- **Honest verification.** Every recalled claim is labelled *changed*, *still correct* or *couldn't verify*. No record means "no record", never a guess.
+- **Built for many users.** Postgres row-level security per user, Redis for caches, limits and resumable streams, a background worker for memory indexing.
+- **A calm, fast UI.** Smooth streaming, edit any message you sent, search your chats, a resizable sidebar, light and dark mode, sign-in with email, Google or GitHub.
+
+---
+
+## Contents
+
+1. [Run it on your machine](#run-it-on-your-machine) (macOS and Windows)
+2. [Configuration](#configuration)
+3. [Tests, evals and load tests](#tests-evals-and-load-tests)
+4. [Architecture](#architecture)
+5. [Tech stack](#tech-stack)
+6. [The journey](#the-journey): how Memo Chat was built, and why
+7. [Project layout](#project-layout)
+
+---
+
+## Run it on your machine
+
+Everything (Postgres with pgvector, Redis, migrations, demo data, the app and the worker) runs in Docker. You need two API keys, both with free tiers:
 
 | Key | Where to get it |
 |---|---|
-| `LLM_API_KEY` | Any OpenAI-compatible endpoint. Defaults are for Gemini: a key from [Google AI Studio](https://aistudio.google.com/apikey). |
-| `EXA_API_KEY` | [exa.ai](https://exa.ai) (free tier works). Or set `SEARCH_PROVIDER=tavily` and `TAVILY_API_KEY`. |
+| `LLM_API_KEY` | A Gemini key from [Google AI Studio](https://aistudio.google.com/apikey). Any OpenAI-compatible endpoint works; see [Configuration](#configuration). |
+| `EXA_API_KEY` | [exa.ai](https://exa.ai) (or use Tavily: `SEARCH_PROVIDER=tavily` and `TAVILY_API_KEY`). |
 
 If a key is missing the app still starts and tells you what to fill in.
 
-## What runs
+### macOS
 
+1. **Install the prerequisites**
+   - [Docker Desktop for Mac](https://docs.docker.com/desktop/setup/install/mac-install/) (Apple silicon or Intel). Open it once so the Docker engine is running.
+   - Git: run `git --version` in Terminal. If it is missing, macOS offers to install the Command Line Tools.
+   - Optional, only for running tests or developing outside Docker: [Node.js 22 or newer](https://nodejs.org/) (`brew install node` works).
+
+2. **Get the code**
+
+   ```bash
+   git clone https://github.com/preeeetham/memo-chat.git
+   cd memo-chat
+   ```
+
+3. **Add your keys**
+
+   ```bash
+   cp .env.example .env
+   open -e .env      # set LLM_API_KEY and EXA_API_KEY, then save
+   ```
+
+4. **Start everything**
+
+   ```bash
+   docker compose up --build
+   ```
+
+   The first build takes a few minutes. When you see the app listening on port 3000, open **http://localhost:3000**.
+
+5. **Sign in.** Locally the app uses a simple username sign-in. Use **`demo`** to see three preloaded, backdated conversations, or any other name for a fresh, separate history.
+
+6. **Stop it** with `Ctrl+C`, or `docker compose down` (your data stays in a Docker volume; add `-v` to wipe it).
+
+### Windows
+
+1. **Install the prerequisites**
+   - [Docker Desktop for Windows](https://docs.docker.com/desktop/setup/install/windows-install/) with the **WSL 2** backend (the installer offers it; accept the restart). Open Docker Desktop once so the engine is running.
+   - [Git for Windows](https://git-scm.com/download/win). During setup, choose **"Checkout as-is, commit Unix-style line endings"** so the shell scripts keep working.
+   - Optional, only for tests or developing outside Docker: [Node.js 22 or newer](https://nodejs.org/) (or `winget install OpenJS.NodeJS.LTS`).
+
+2. **Get the code** (PowerShell)
+
+   ```powershell
+   git clone https://github.com/preeeetham/memo-chat.git
+   cd memo-chat
+   ```
+
+3. **Add your keys**
+
+   ```powershell
+   Copy-Item .env.example .env
+   notepad .env      # set LLM_API_KEY and EXA_API_KEY, then save
+   ```
+
+4. **Start everything**
+
+   ```powershell
+   docker compose up --build
+   ```
+
+   Then open **http://localhost:3000** and sign in as **`demo`** (or any name).
+
+5. **Stop it** with `Ctrl+C`, or `docker compose down`.
+
+> **Ports in use?** The stack uses 3000 (app), 5433 (Postgres) and 6380 (Redis). Change them with `APP_PORT`, `POSTGRES_PORT` or `REDIS_PORT` in `.env`.
+
+### Run the tests
+
+With Node.js installed, start just the databases and run the suite. The commands are the same on macOS and Windows:
+
+```bash
+docker compose up -d postgres redis migrate   # databases + schema
+npm install
+npm test                                      # unit + integration tests
 ```
-app      Next.js UI + API (stateless; scale with --scale app=N behind a load balancer)
-worker   post-turn extraction: digests, claims ledger, embeddings (--scale worker=N)
-postgres conversations, messages, digests, claims, web evidence, outbox; RLS per user
-redis    plan/search/embedding caches, rate limits (+ optional token budgets), SSE buffers, job stream
-migrate  one-shot: applies db/migrations, creates the app's non-superuser role
-seed     one-shot: demo history for user "demo" (SEED_DEMO=false to skip)
+
+Integration tests use throwaway databases on the compose Postgres and skip themselves if it is not running.
+
+### Develop without the app container
+
+```bash
+docker compose up -d postgres redis migrate
+npm install
+npm run dev        # http://localhost:3000, hot reload
+npm run worker     # in a second terminal: memory indexing
 ```
 
-## Sign-in
+The defaults in `src/config.ts` point at the compose ports, so `.env` only needs the API keys.
 
-- **`AUTH_MODE=password`** (default when unset): email + password accounts, plus **Continue as guest** (a private anonymous account that lives as long as that browser's session). Passwords are hashed with scrypt; sign-up, sign-in and guest creation are rate-limited per IP and per email. Set a real `AUTH_SECRET` and `PUBLIC_URL` (https makes the session cookie `Secure`).
-- **Google and GitHub** (optional, with `AUTH_MODE=password`): set `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID` and `FIREBASE_APP_ID` from a Firebase web app with the Google and GitHub providers turned on, and add your domain to its authorized domains. The browser signs in with Firebase; the server verifies the Firebase ID token against Google's public keys (no service account needed) and issues its own session. A verified email that already has an email/password account signs in to that account.
-- **`AUTH_MODE=dev`**: pick any username, no password. For local use only; `docker compose` uses it so the `demo` user works.
-- **`AUTH_MODE=oidc`**: any OpenID Connect provider (Auth0, Okta, Cognito, Keycloak, Google, Entra, Clerk). Set `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` (if the client is confidential), `PUBLIC_URL`, and a real `AUTH_SECRET`; register `PUBLIC_URL/api/auth/callback` as the redirect URI. API clients can also send the provider's token as `Authorization: Bearer …`.
+---
 
-For anything shared, also set `DEMO_TOOLS=false` (the demo clock is server-wide) and `SEED_DEMO=false`.
+## Configuration
 
-The verified user id becomes `app.user_id` for the database transaction, and every table's row-level security policy checks it. The app connects as a role that cannot bypass RLS.
+All settings live in `.env` (see [.env.example](.env.example) for every key, with comments).
 
-## Limits and fallbacks
+**Model and search**
 
 | Setting | Default | |
 |---|---|---|
-| `DAILY_TOKEN_BUDGET` | 0 (off) | optional cap on tokens per user per UTC day; 0 = unlimited |
-| `RATE_LIMIT_PER_MINUTE` | 20 | chat turns per user |
-| `LLM_FALLBACK_MODEL` | (none) | used when the main model is rate-limited or down; the answer is marked degraded |
-| `SEARCH_FALLBACK_PROVIDER` | (none) | e.g. `tavily` when Exa fails |
-| `EMBEDDING_MODEL` | `gemini-embedding-001` | hybrid recall (full text + vectors); empty = full text only |
+| `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` | Gemini `gemini-3.5-flash-lite` | Any OpenAI-compatible endpoint |
+| `HELPER_MODEL` | same as `LLM_MODEL` | Cheaper model for planning and memory extraction |
+| `LLM_FALLBACK_MODEL` | none | Used when the main model is rate-limited or down; the answer is marked as degraded |
+| `EMBEDDING_MODEL` | `gemini-embedding-001` | Hybrid recall (full text + vectors). Empty = full text only |
+| `SEARCH_PROVIDER`, `SEARCH_FALLBACK_PROVIDER` | `exa`, none | `exa` or `tavily` |
 
-If Redis is down the app keeps working: caches are skipped, limits are counted per process, and the worker picks up jobs from Postgres.
+**Sign-in** (`AUTH_MODE`)
 
-## Try the memory without waiting a week
+| Mode | What it is |
+|---|---|
+| `password` (default when unset) | Email and password (scrypt hashes, rate-limited), plus **Google and GitHub** when the four `FIREBASE_*` values are set. A verified Google email that matches an email account signs in to that account. |
+| `dev` | Pick any username, no password. Local only; `docker compose` uses it so the `demo` user works. |
+| `oidc` | Any OpenID Connect provider (Auth0, Okta, Cognito, Keycloak, Entra, Clerk). |
 
-Sign in as `demo`, or open **demo tools** (bottom left) and click **Load demo history** to load it into your own account. That writes three backdated conversations, dated relative to today: a CRM shortlist last Monday, a Node.js question on 3 November, and Postgres hosting prices last Tuesday. They are marked `[demo]` and their contents are illustrative.
+For Google and GitHub sign-in: create a Firebase project, enable both providers (GitHub needs an OAuth app whose callback is the URL Firebase shows), add your domain under **Authentication → Settings → Authorized domains**, register a web app, and copy `apiKey`, `authDomain`, `projectId` and `appId` into `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID`, `FIREBASE_APP_ID`. The server verifies Firebase ID tokens against Google's public keys, so no service account is needed.
 
-You can also freeze the clock (demo tools, or `MEMOCHAT_FAKE_NOW` in `.env`) and load your own transcripts into your account:
+For any shared deployment set a real `AUTH_SECRET` (`openssl rand -hex 32`), `PUBLIC_URL`, `DEMO_TOOLS=false` and `SEED_DEMO=false`.
 
-```bash
-TOKEN=$(curl -s -X POST localhost:3000/api/auth/dev-login -H 'content-type: application/json' -d '{"username":"alice"}' | node -pe 'JSON.parse(require("fs").readFileSync(0)).token')
-curl -X POST localhost:3000/api/import -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{
-  "tz": "Asia/Kolkata",
-  "conversations": [{ "title": "Vector DBs", "messages": [
-    { "role": "user", "text": "Compare Pinecone and Weaviate pricing", "created_at": "2026-11-02T10:00:00+05:30" },
-    { "role": "assistant", "text": "Pinecone Standard starts at ...", "created_at": "2026-11-02T10:01:00+05:30" }
-  ]}]
-}'
-```
+**Limits**
 
-## Developing without the app container
+| Setting | Default | |
+|---|---|---|
+| `RATE_LIMIT_PER_MINUTE` | 20 | Chat turns per user per minute |
+| `DAILY_TOKEN_BUDGET` | 0 (off) | Optional cap on tokens per user per UTC day |
 
-```bash
-docker compose up -d postgres redis migrate    # databases + schema
-npm install
-npm run dev                                    # http://localhost:3000
-npm run worker                                 # in another terminal
-```
+If Redis goes down the app keeps working: caches are skipped, limits are counted per process, and the worker picks jobs up from Postgres.
 
-The defaults in `src/config.ts` point at the compose ports (Postgres 5433, Redis 6380), so `.env` only needs the API keys.
+---
 
-## Scripts
+## Tests, evals and load tests
 
 | Command | What it does |
 |---|---|
-| `npm test` | Unit tests (dates, auth, search gateway, limits) and, if the compose Postgres is up, the isolation tests |
-| `npm run test:integration` | Two users in one database: neither can read, find, recall, change or delete the other's history |
-| `npm run smoke` | End to end against the running stack: sign-in, isolation over HTTP, a real streamed turn, resume, the worker indexing it |
+| `npm test` | Date resolution (47 cases), auth and Firebase token checks, the search gateway and limits; plus integration tests when Postgres is up: per-user isolation, cross-chat recall by time, editing and truncation, accounts and account linking |
+| `npm run smoke` | End to end against a running stack: sign-in, isolation over HTTP, a real streamed turn, resume after a dropped connection, the worker indexing it |
 | `npm run eval` | The sample questions and edge cases against seeded history with a frozen clock, in a throwaway database; writes `eval-results.md` |
-| `npm run migrate` | Apply `db/migrations` (idempotent) |
-| `npm run seed -- --user alice` | Demo history for a dev user (`--drain` indexes it without a worker) |
+| `bash loadtest/run.sh` | Locust load test: many users through a load balancer in front of three app replicas, every response checked for the right date and zero cross-user leaks |
 | `npm run typecheck` | `tsc --noEmit` |
 
-On a free-tier Gemini key (15 requests/minute) the eval pauses between scenarios; set `EVAL_PAUSE_MS=0` on a paid key.
+The load test mocks the model and web search, so it costs nothing. Last run on a laptop: **300 users, 14,806 chat turns at about 95 requests/s, 0 failures, 0 cross-user leaks**, every recall on the right date; p95 0.66 s for "no record" and 1.2–2.0 s for recall plus web verification.
 
-## Load test
+**Try memory without waiting a week:** sign in as `demo`, or open **demo tools** (bottom left, local only) to load backdated history into your own account and freeze the clock. You can also import your own transcripts with `POST /api/import`.
 
-[Locust](https://locust.io) drives many simulated users through a load balancer in front of three app replicas. Each user signs in, imports their own backdated history (a CRM shortlist on Monday 9 Nov, Postgres hosting on Tuesday 10 Nov, a Node.js question on 3 Nov, each tagged with a secret per-user token), and then keeps asking the memory questions: "On Monday we shortlisted 5 CRM tools…", "Last Tuesday I asked you about Postgres hosting…", "What did I ask you on 3 November?", "What did I ask you on 20 October?". Every response is checked: the turn finished, recall picked the right date and this user's own turn, and no other user's token appears anywhere in the recall, the answer or the conversation list.
+---
 
-```bash
-LT_USERS=300 LT_SPAWN_RATE=30 LT_DURATION=3m bash loadtest/run.sh
+## Architecture
+
+```mermaid
+flowchart LR
+    U[Browser<br/>Next.js UI] -- "POST /api/chat<br/>SSE stream" --> A
+
+    subgraph App["app (stateless, scales horizontally)"]
+      A[Auth + rate limit] --> P[Planner<br/>helper model]
+      P --> D[Date resolver<br/>pure code]
+      D --> R[Recall<br/>SQL only]
+      R --> L[Agent loop<br/>streaming, ≤ 4 rounds]
+      L -- web_search --> S[Search gateway<br/>cache, fallback]
+    end
+
+    R -- "as the user (RLS)" --> PG[(Postgres + pgvector)]
+    L -- "answer + job, one transaction" --> PG
+    S --> X[Exa / Tavily]
+    L --> G[Gemini<br/>OpenAI-compatible]
+    A <--> RD[(Redis<br/>limits, caches,<br/>resumable streams)]
+    PG -- outbox --> W[worker<br/>digests, claims,<br/>embeddings]
+    W --> PG
 ```
 
-The LLM and web search are mocked (`loadtest/mock-llm.ts`, `SEARCH_PROVIDER=mock`) so the run costs nothing and stays clear of provider rate limits; the mock adds about 0.4 s per model round so latencies look like streaming. The clock is frozen at Wednesday 11 Nov 2026 so each date has one right answer. Results go to `loadtest/results/` (`correctness.json`, an HTML report, CSVs). The script also reports how long the worker takes to drain the extraction backlog afterwards.
+**One turn, end to end**
 
-Last run on a laptop (Docker Desktop, 3 app replicas, 2 workers × 16 consumers): 300 users, 14,806 chat turns at ~95 requests/s, **0 failures, 0 cross-user leaks**, every recall on the right date. p95: 0.66 s for "no record", 1.2–2.0 s for recall + web verification (mostly the mock's simulated model time). Backlog drained 31 s after the run.
+1. The session is verified and the user's id becomes `app.user_id` for every database transaction. **Row-level security** on every table means a query can only ever see that user's rows.
+2. A small **planner** call classifies the message (chat, lookup, recall, recall-and-verify, research) and pulls out time expressions, keywords and entities. If it fails, regex rules take over.
+3. **Dates are resolved in code**: "last Tuesday" becomes candidate date ranges in the user's timezone (just after midnight, "this morning" also covers the day that just ended).
+4. **Recall** (SQL only, no model call) filters by date first, then fuses full-text and vector matches (reciprocal rank fusion) across all of the user's chats. The result goes to the model as `[M1]`, `[M2]` records.
+5. The **agent loop** streams the answer, calling `web_search` (up to 5 parallel queries per call, with date and domain filters) when it needs current facts. Results are cited as `[S1]`, `[S2]`.
+6. The answer and its memory-indexing job are written **in one transaction** (an outbox). The **worker** then extracts a digest, a claims ledger (what was said, the value, the source and when it was seen) and an embedding, so later turns can verify "is that still true?".
+7. Every streamed event is buffered in Redis with an id, so a dropped connection **resumes** where it left off.
 
-## Layout
+The many-user design target (sharding by user, hot/warm/cold history, an LLM gateway, multi-region) is drawn below and described in [DESIGN.md](DESIGN.md):
+
+<p align="center">
+  <img src="docs/architecture-scaled.png" alt="Many-user architecture design: stateless app tier, shared services (Redis, LLM gateway, search gateway), Postgres sharded by user with row-level security, async extraction pipeline, observability" width="900" />
+</p>
+
+---
+
+## Tech stack
+
+| Layer | Choice | Why |
+|---|---|---|
+| UI and API | **Next.js 16** (App Router), React 19, TypeScript | One deployable for UI and streaming API routes |
+| Model | **Gemini** via its OpenAI-compatible endpoint | Swappable for any OpenAI-compatible model through `.env` |
+| Web search | **Exa** (Tavily as fallback) | Publish-date filters and full page text we can store |
+| Database | **Postgres 17 + pgvector** | Row-level security, full text and vectors in one engine and one transaction |
+| Cache and streams | **Redis** | Rate limits, caches, resumable SSE buffers, job stream |
+| Background work | Node worker (outbox + Redis stream + periodic sweep) | Memory indexing never delays a reply and never loses a job |
+| Dates | `chrono-node`, `date-fns`, `@date-fns/tz` | Deterministic, timezone-aware, unit-tested |
+| Auth | Own sessions (`jose` JWT), scrypt passwords, **Firebase Auth** for Google and GitHub, OIDC | No auth vendor lock-in; Firebase tokens verified server-side |
+| Tests | Vitest, Locust, a scripted eval with an LLM judge | Unit, integration, end-to-end, eval and load |
+| Hosting | **Docker** locally, **Railway** in production | The app, worker, Postgres and Redis run as four services |
+
+---
+
+## The journey
+
+Memo Chat was built for a challenge from [Project Minimi](https://projectminimi.com): *a chat agent with exactly one tool, web search, "as good as the best ones on the internet today."* Judging was on architecture: answers fast, gets things right, good to talk to. The full, longer story is in [PROJECT_JOURNEY.md](PROJECT_JOURNEY.md); this is the short version.
+
+### 1. Reading the brief: a memory problem in disguise
+
+The three sample questions all had the same shape: *"On Monday we shortlisted 5 CRM tools…"*, *"What did I ask you on 3 November? Is your answer still correct?"*, *"Last Tuesday I asked about Postgres hosting. Has pricing changed?"* Each one needs the agent to resolve a relative date, recall what was said **and what it answered** that day, search for what changed since, and compare honestly. So this was less "a chatbot with search" and more **a memory-plus-verification agent**. That reading drove every decision after it.
+
+### 2. Research, and cutting it down
+
+We started from an enterprise memory design with four tiers (episodic, semantic, retrieval, working memory), entity graphs, RAPTOR summaries and a bitemporal fact model. We checked it against the brief, the LongMemEval benchmark and the search APIs available (Exa, Tavily, Brave, Perplexity). The verdict: **the principles were right, the scope was wrong.** We kept the core ideas (raw messages are the source of truth, summaries only help *find* things, facts link back to their source, a compact evidence bundle for the model, memory work after the reply) and cut the rest until the product needed it.
+
+### 3. Version 1: a single-user agent (11–12 Nov)
+
+- **Recall before the model, not as a tool.** The rules allow one tool, and a recall tool would add a model round trip on exactly the questions that need to be fast. SQL recall takes about 10 ms.
+- **Dates in code.** Models are unreliable at calendar arithmetic, and a wrong date breaks everything after it. A pure, tested function handles "last Tuesday" (two candidates, the topic picks one), year rollover, and timezones.
+- **The agent remembers its own side.** Every search, every page excerpt it read, and a claims ledger per turn ("Neon Launch: $5/month minimum, seen 10 Nov, neon.com/pricing"), so "is that still correct?" has something to check against.
+- **Our own `web_search` on Exa**, not a model's built-in grounded search, because we needed publish-date filters and page text we can store.
+- **Honesty rules.** *Changed*, *still correct* or *couldn't verify*, with citations. "No announcement found" is not "unchanged".
+- SQLite with FTS5 kept `npm run dev` zero-setup. Gemini through an OpenAI-compatible endpoint kept the model swappable.
+
+Stress tests (about 40 adversarial conversations) found real gaps: paraphrases ("sales software" vs "CRM"), changed decisions, long chats. The paraphrase gap is why vector search came back later.
+
+### 4. Version 2: many users (16 Nov)
+
+Designing for many users made SQLite's single writer and lack of row-level security the limit, and Docker made Postgres as easy to start, so we moved:
+
+- **Postgres row-level security** on every table, with the app connecting as a role that cannot bypass it. Isolation lives in the database, not in every query.
+- **Redis** for caches, per-user rate limits and resumable streams, treated as an accelerator: if it is down, the app still works.
+- **An outbox and a worker** for memory extraction, plus **pgvector** for hybrid recall (date first, then full text and vectors fused with RRF).
+- **Docker Compose**: anyone can run the whole stack with two keys.
+- A **Locust load test** with a mocked model: 300 users, ~15,000 memory questions, **zero cross-user leaks**.
+
+### 5. A redesign, a name and a home (16–17 Nov)
+
+The UI was rebuilt on a clean white canvas with one orange accent, and it now shows *how* each answer was made: how a date was read ("Last Tuesday → Tue 10 Nov"), which past conversation was recalled, and a "since then" tally. The project was renamed from Mini Chat to **Memo Chat**, a name that says what makes it different, and got one logo used everywhere.
+
+It went live on **Railway** rather than Vercel or Netlify: those run serverless functions and static pages, while Memo Chat needs a long-running streaming server, a separate worker, Postgres with pgvector and Redis. Railway runs all four from the same Dockerfile, with migrations as a pre-deploy step.
+
+### 6. Real accounts (17–18 Nov)
+
+The local "pick a username" login was unsafe on a public URL, so it gained **email and password** sign-in (scrypt, constant-time checks, the same error for unknown emails and wrong passwords, rate limits) and then **Google and GitHub via Firebase**. The browser signs in with Firebase and sends the ID token once; the server verifies it against Google's public keys and issues its own session, so memory and isolation work exactly as before. New users are greeted by name ("Welcome, Rishi"; "Welcome back, Rishi" after that), taken from the provider when it has one.
+
+### 7. Polishing the conversation (17–18 Nov)
+
+- **Smooth streaming.** The model sends text in bursts; the page now reveals it at a steady pace. A subtle bug where an answer could freeze half-rendered when the stream finished mid-animation was found and fixed.
+- **Citations that read well.** Small inline links instead of bold markers and source cards, so the answer reads like a well-researched paragraph.
+- **Memory only when it is real.** The "Recalled" row appears only when something was recalled.
+- **A real memory bug, found in testing.** Asked just after midnight "who were we discussing this morning?", recall looked only at the new day, found nothing, and the model guessed from a web search, then claimed it had no memory. Now early-hours "today" covers the day that just ended, empty days fall back to the neighbouring day, and the model is told on every turn that it remembers across chats and must cite the record.
+- **No daily token cap.** The original 300,000 tokens/user/day limit was our own, not Gemini's, and could cut a reviewer off mid-test. It is off by default; the per-minute limit stays.
+
+### 8. Editing, search and the sidebar (18 Nov)
+
+- **Edit any message you sent.** Editing replaces that message and everything after it, then answers again. We chose **truncate-and-regenerate over branching**: with branches, answers a user thought they had removed would still sit in memory and could be recalled in other chats. One transaction removes the later messages *and* everything derived from them (digests, vectors, claims, search records, queued jobs), and an extraction already running finds its message gone and saves nothing. A plain confirmation says how many messages will go first.
+- **Search your chats** by title or message text, kept to your own by row-level security.
+- **A sidebar you control**: collapse it, resize it by dragging (with a sensible minimum), and delete chats in two deliberate steps instead of one stray click.
+
+### What is next
+
+Retiring claims when a decision changes ("we went with Supabase instead"), summarising long chats instead of replaying the last ten turns, password reset and email verification, watchers that re-check shortlisted vendors daily, and the sharded, multi-region design above when the user count calls for it. See [PROJECT_JOURNEY.md](PROJECT_JOURNEY.md#5-future-scope).
+
+---
+
+## Project layout
 
 ```
-app/                      Next.js UI (page.tsx, login/) and API routes (chat SSE + resume + stop, conversations, import, seed, settings, auth, health)
-src/agent/turn.ts         one turn end to end
-src/agent/planner.ts      helper-model classification (cached), regex fallback
+app/                      Next.js UI (page.tsx, login/) and API routes:
+                          chat (SSE, resume, stop, edit), conversations (+ search), auth, profile, import, health
+src/agent/                turn.ts (one turn end to end), planner.ts, recall.ts, loop.ts (streaming tool loop), prompt.ts
 src/time/resolve.ts       "last Tuesday" -> dates (pure, tested)
-src/agent/recall.ts       SQL-only memory retrieval (date range + full text + vectors, RRF) -> evidence bundle
-src/agent/loop.ts         streaming tool loop (OpenAI-compatible, Gemini-aware), model fallback, token metering
-src/search/               web_search tool, gateway (shared cache, coalescing, fallback), Exa / Tavily providers
-src/memory/               post-turn extraction (digest + claims ledger + embedding), outbox + worker loop, import
-src/auth/                 sessions, OIDC (code flow + PKCE, bearer tokens), dev sign-in
+src/search/               web_search tool, gateway (shared cache, coalescing, fallback), Exa / Tavily
+src/memory/               post-turn extraction (digest, claims, embedding), outbox + worker loop, import
+src/auth/                 sessions, passwords, Firebase (Google/GitHub), OIDC, dev sign-in, rate limits
 src/db/                   Postgres access as the current user (RLS), all SQL, migrations runner
 src/redis.ts, budget.ts, stream.ts   Redis client, per-user limits, resumable SSE buffers
 src/worker/main.ts        the worker process
 db/migrations/            schema, indexes, row-level security policies
 scripts/                  migrate, seed, eval, smoke
+tests/                    unit tests; tests/integration/ against a real Postgres
 loadtest/                 Locust load test, mock LLM, nginx load balancer, compose overlay
+docs/                     README images
 ```
+
+---
+
+<div align="center">
+<sub>Built with care by <a href="https://github.com/preeeetham">preeeetham</a>. Design notes in <a href="DESIGN.md">DESIGN.md</a>, the long story in <a href="PROJECT_JOURNEY.md">PROJECT_JOURNEY.md</a>.</sub>
+</div>
