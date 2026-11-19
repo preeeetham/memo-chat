@@ -10,6 +10,7 @@ import {
   lastAssistantIds,
   nearestTurns,
   scoreTurns,
+  scoreTurnsDetailed,
   turnsByIds,
   turnsInRange,
   type TurnRow,
@@ -31,7 +32,8 @@ export type RecalledTurn = {
   claims: RecalledClaim[];
 };
 export type EvidenceBundle = {
-  status: "found" | "ambiguous" | "none" | "not_needed";
+  /** confirm: plausible matches by topic, but not certain enough to answer from; the model asks the user first. */
+  status: "found" | "ambiguous" | "confirm" | "none" | "not_needed";
   resolved: Array<{ expr: string; date: string }>;
   turns: RecalledTurn[];
   history_span?: { first: string; last: string };
@@ -47,6 +49,38 @@ const EVIDENCE_CHARS = 600;
 const BUNDLE_CHARS = 14_000; // ~3.5k tokens
 
 const PRICE_ATTR = /price|pricing|cost|plan|tier|seat|fee|limit|quota/i;
+
+/** Vector similarity at or above this counts as a strong topic match. */
+const HIGH_SIMILARITY = 0.75;
+/** The best match must outscore the best match on any other date by this factor to be "clearly ahead". */
+const CLEAR_LEAD = 1.5;
+const TOPIC_CANDIDATES = 20;
+
+export type Confidence = "high" | "medium" | "low";
+export type ScoredTurn = { assistant_id: string; local_date: string; score: number; sim: number | null; fts: boolean };
+
+/**
+ * How sure are we that the best topic match is the conversation the user means?
+ * high: a strong match (vector similarity >= 0.75, or a full-text hit when vectors are off) that is
+ * clearly ahead of the best match on any other date. medium: a real match, but weaker or split across
+ * dates, so the user is asked to confirm. low: nothing worth offering.
+ */
+export function judgeConfidence(matches: ScoredTurn[], vectorsOn: boolean): { level: Confidence; picks: ScoredTurn[] } {
+  const sorted = [...matches].filter((m) => m.score > 0).sort((a, b) => b.score - a.score);
+  const top = sorted[0];
+  if (!top) return { level: "low", picks: [] };
+  const strong = vectorsOn ? (top.sim ?? 0) >= HIGH_SIMILARITY : top.fts;
+  const rival = sorted.find((m) => m.local_date !== top.local_date);
+  const clearLead = !rival || top.score >= CLEAR_LEAD * rival.score;
+  if (strong && clearLead) return { level: "high", picks: sorted.filter((m) => m.local_date === top.local_date).slice(0, 3) };
+  if (top.fts || top.sim !== null) {
+    // One best match per date, so the question can name each option by its date.
+    const perDate = new Map<string, ScoredTurn>();
+    for (const m of sorted) if (!perDate.has(m.local_date)) perDate.set(m.local_date, m);
+    return { level: "medium", picks: [...perDate.values()].slice(0, 3) };
+  }
+  return { level: "low", picks: [] };
+}
 
 /**
  * queryEmbedding: the caller may start embedding the user's message while the planner runs, so the
@@ -71,6 +105,20 @@ export async function recall(p: Plan, resolutions: Resolution[], conversationId:
     : null;
   const vector = qvec ? { embedding: qvec, minSimilarity: config().embeddings.minSimilarity } : null;
   const score = (ids?: string[]) => (keywords.length ? scoreTurns(keywords, ids, vector) : Promise.resolve(new Map<string, number>()));
+  /** Topic first, dates second: indexed full-text + vector lookup over all of this user's turns, judged for confidence. */
+  const topicFirst = async (): Promise<{ level: Confidence; turns: TurnRow[] }> => {
+    if (!keywords.length) return { level: "low", turns: [] };
+    const detail = await scoreTurnsDetailed(keywords, undefined, vector);
+    for (const id of exclude) detail.delete(id);
+    const ids = [...detail.entries()].sort((a, b) => b[1].score - a[1].score).slice(0, TOPIC_CANDIDATES).map(([id]) => id);
+    const rows = await turnsByIds(ids);
+    const scored = rows.map((r) => ({ assistant_id: r.assistant_id, local_date: r.local_date, ...detail.get(r.assistant_id)! }));
+    const { level, picks } = judgeConfidence(scored, Boolean(vector));
+    const byId = new Map(rows.map((r) => [r.assistant_id, r]));
+    return { level, turns: picks.map((p) => byId.get(p.assistant_id)!).filter(Boolean) };
+  };
+  const confirmNote = (turns: TurnRow[], context: string) =>
+    `${context}These earlier conversations match the topic, but not certainly enough to answer from. Don't answer from them yet: ask the user one short question naming each by date and topic (for example "Did you mean your chat on ${turns[0] ? turns[0].local_date : "that day"} about ...?"). When they confirm, answer from that record.`;
   const history_span = span ? { first: span.first, last: span.last } : undefined;
 
   let chosen: TurnRow[] = [];
@@ -108,9 +156,21 @@ export async function recall(p: Plan, resolutions: Resolution[], conversationId:
         const wideScores = wideTurns.length ? await score(wideTurns.map((t) => t.assistant_id)) : new Map<string, number>();
         const wideMatched = wideTurns.filter((t) => (wideScores.get(t.assistant_id) ?? 0) > 0);
         const anyOnDay = perCandidate.find((c) => c.turns.length);
+        const fallback = wideMatched.length ? null : await topicFirst();
         if (wideMatched.length) {
           chosen.push(...wideMatched.slice(0, MAX_TURNS_PER_DAY));
           note = `Nothing on ${rangeLabel(first)} matched; found a matching conversation one day off.`;
+        } else if (fallback && fallback.level === "high") {
+          // The user remembered the date wrong: the topic clearly lives on another day.
+          chosen.push(...fallback.turns);
+          const dates = [...new Set(fallback.turns.map((t) => t.local_date))];
+          const k = resolutions.indexOf(r);
+          if (k >= 0) resolved[k] = { expr: r.expr, date: dates[0]! };
+          note = `Nothing about this topic on ${rangeLabel(first)}. The matching conversation is from ${dates.join(", ")}: tell the user plainly it was on that date, not ${rangeLabel(first)}.`;
+        } else if (fallback && fallback.level === "medium") {
+          chosen.push(...fallback.turns);
+          status = "confirm";
+          note = confirmNote(fallback.turns, `Nothing about this topic on ${rangeLabel(first)}. `);
         } else if (anyOnDay) {
           // The user named the day; show what happened then even if the words differ.
           chosen.push(...anyOnDay.turns.slice(0, MAX_TURNS_PER_DAY));
@@ -124,10 +184,13 @@ export async function recall(p: Plan, resolutions: Resolution[], conversationId:
       }
     }
   } else if (keywords.length) {
-    const scores = await score();
-    for (const id of exclude) scores.delete(id);
-    const ids = [...scores.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([id]) => id);
-    chosen = await turnsByIds(ids);
+    // No date: find the topic first, then read the dates off the matches.
+    const fallback = await topicFirst();
+    if (fallback.level !== "low") chosen = fallback.turns;
+    if (fallback.level === "medium") {
+      status = "confirm";
+      note = confirmNote(fallback.turns, "");
+    }
   }
 
   // De-duplicate, then order chronologically (reads naturally, and stable refs).

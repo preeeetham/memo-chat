@@ -156,6 +156,7 @@ function replayHistory(rows: MessageRow[]): ChatCompletionMessageParam[] {
 function memoryStatus(b: Awaited<ReturnType<typeof recall>>): string | null {
   if (b.status === "not_needed") return null;
   if (b.status === "none") return "No matching past conversation found";
+  if (b.status === "confirm") return "Found possible matches; asking which one you meant";
   const days = [...new Set(b.turns.map((t) => shortLabel(t.local_date)))];
   return `Recalled ${b.turns.length} past ${b.turns.length === 1 ? "exchange" : "exchanges"} from ${days.join(", ")}`;
 }

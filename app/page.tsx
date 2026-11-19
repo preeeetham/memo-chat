@@ -538,7 +538,7 @@ export default function Page() {
         )}
         {mem && (
           <div className="ctx-row">
-            <span className="ctx-label"><i className="i-mem" />Recalled</span>
+            <span className="ctx-label"><i className="i-mem" />{mem.status === "confirm" ? "Did you mean" : "Recalled"}</span>
             <span className="ctx-body">
               {mem.recalled.map((r) => (
                   <button key={r.ref} className="recall" title={`Open: ${r.conversation_title ?? ""}`} onClick={() => void openConv(r.conversation_id)}>

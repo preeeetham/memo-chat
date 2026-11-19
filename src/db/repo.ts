@@ -267,6 +267,9 @@ const STOP = new Set(["the", "and", "for", "you", "what", "did", "was", "are", "
 
 const RRF_K = 60;
 
+/** One scored turn: fused RRF score, best vector similarity (if vectors ran) and whether full text matched. */
+export type TurnScore = { score: number; sim: number | null; fts: boolean };
+
 /**
  * Score turns (assistant message ids) by fusing ranked lists with reciprocal rank fusion:
  * full text over raw messages, digests and claims, plus (if an embedding is given) vector
@@ -277,18 +280,34 @@ export async function scoreTurns(
   restrictTo?: string[],
   vector?: { embedding: number[]; minSimilarity: number } | null,
 ): Promise<Map<string, number>> {
+  const detail = await scoreTurnsDetailed(keywords, restrictTo, vector);
+  return new Map([...detail].map(([id, d]) => [id, d.score]));
+}
+
+/**
+ * Same ranking as scoreTurns, with the signals recall needs to judge confidence. Every list is an
+ * index lookup with a LIMIT (GIN for full text, HNSW for vectors), so this never scans the history.
+ */
+export async function scoreTurnsDetailed(
+  keywords: string[],
+  restrictTo?: string[],
+  vector?: { embedding: number[]; minSimilarity: number } | null,
+): Promise<Map<string, TurnScore>> {
   const query = ftsQuery(keywords);
-  const scores = new Map<string, number>();
+  const scores = new Map<string, TurnScore>();
   if (!query && !vector) return scores;
   const restrict = restrictTo ? new Set(restrictTo) : null;
-  const addList = (ids: Array<string | null>, weight: number) => {
+  const get = (id: string) => scores.get(id) ?? (scores.set(id, { score: 0, sim: null, fts: false }), scores.get(id)!);
+  const addList = (ids: Array<string | null>, weight: number, fts: boolean) => {
     let rank = 0;
     const seen = new Set<string>();
     for (const id of ids) {
       if (!id || seen.has(id) || (restrict && !restrict.has(id))) continue;
       seen.add(id);
       rank++;
-      scores.set(id, (scores.get(id) ?? 0) + weight / (RRF_K + rank));
+      const s = get(id);
+      s.score += weight / (RRF_K + rank);
+      if (fts) s.fts = true;
     }
   };
   await tx(async (run) => {
@@ -301,19 +320,19 @@ export async function scoreTurns(
          WHERE m.tsv @@ tq ORDER BY ts_rank_cd(m.tsv, tq) DESC LIMIT 200`,
         [query],
       );
-      addList(msgHits.map((h) => h.aid), 1);
+      addList(msgHits.map((h) => h.aid), 1, true);
       const digestHits = await run<{ id: string }>(
         `SELECT d.assistant_message_id AS id FROM turn_digests d, to_tsquery('english', $1) tq
          WHERE d.tsv @@ tq ORDER BY ts_rank_cd(d.tsv, tq) DESC LIMIT 100`,
         [query],
       );
-      addList(digestHits.map((h) => h.id), 1.5);
+      addList(digestHits.map((h) => h.id), 1.5, true);
       const claimHits = await run<{ id: string }>(
         `SELECT c.assistant_message_id AS id FROM claims c, to_tsquery('english', $1) tq
          WHERE c.tsv @@ tq ORDER BY ts_rank_cd(c.tsv, tq) DESC LIMIT 200`,
         [query],
       );
-      addList(claimHits.map((h) => h.id), 1);
+      addList(claimHits.map((h) => h.id), 1, true);
     }
     if (vector) {
       const vecHits = await run<{ id: string; sim: number }>(
@@ -321,7 +340,12 @@ export async function scoreTurns(
          WHERE embedding IS NOT NULL ORDER BY embedding <=> $1::vector LIMIT 50`,
         [toVector(vector.embedding)],
       );
-      addList(vecHits.filter((h) => h.sim >= vector.minSimilarity).map((h) => h.id), 1);
+      const kept = vecHits.filter((h) => h.sim >= vector.minSimilarity && (!restrict || restrict.has(h.id)));
+      addList(kept.map((h) => h.id), 1, false);
+      for (const h of kept) {
+        const s = get(h.id);
+        s.sim = Math.max(s.sim ?? 0, Number(h.sim));
+      }
     }
   });
   return scores;
