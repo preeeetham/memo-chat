@@ -120,6 +120,8 @@ export async function recall(p: Plan, resolutions: Resolution[], conversationId:
   const confirmNote = (turns: TurnRow[], context: string) =>
     `${context}These earlier conversations match the topic, but not certainly enough to answer from. Don't answer from them yet: ask the user one short question naming each by date and topic (for example "Did you mean your chat on ${turns[0] ? turns[0].local_date : "that day"} about ...?"). When they confirm, answer from that record.`;
   const history_span = span ? { first: span.first, last: span.last } : undefined;
+  // Phrases the code and the planner couldn't turn into dates: say so, and search by topic instead.
+  const unreadNote = p.time_expressions.length && !resolutions.length ? `Couldn't read "${p.time_expressions.join('", "')}" as a date, so this was found by topic. ` : "";
 
   let chosen: TurnRow[] = [];
   let status: EvidenceBundle["status"] = "found";
@@ -173,8 +175,13 @@ export async function recall(p: Plan, resolutions: Resolution[], conversationId:
           note = confirmNote(fallback.turns, `Nothing about this topic on ${rangeLabel(first)}. `);
         } else if (anyOnDay) {
           // The user named the day; show what happened then even if the words differ.
-          chosen.push(...anyOnDay.turns.slice(0, MAX_TURNS_PER_DAY));
-          note = `Conversations on ${rangeLabel(anyOnDay.range)} don't mention the topic keywords; showing everything from that day.`;
+          const oneDay = anyOnDay.range.start === anyOnDay.range.end;
+          chosen.push(...pickFromRange(anyOnDay.turns, MAX_TURNS_PER_DAY, r.expr));
+          note = oneDay
+            ? `Conversations on ${rangeLabel(anyOnDay.range)} don't mention the topic keywords; showing everything from that day.`
+            : anyOnDay.turns.length > MAX_TURNS_PER_DAY
+              ? `There were ${anyOnDay.turns.length} conversations in ${rangeLabel(anyOnDay.range)}; showing ${MAX_TURNS_PER_DAY} spread across it. Give each one's date, and offer to look closer at any of them.`
+              : `These are the conversations in ${rangeLabel(anyOnDay.range)}. Give each one's date.`;
         } else if (wideTurns.length) {
           // Nothing on the named day at all, but the user talked to us the day before or after
           // (e.g. "this morning" asked just past midnight): show those, newest first.
@@ -183,14 +190,31 @@ export async function recall(p: Plan, resolutions: Resolution[], conversationId:
         }
       }
     }
+  } else if (keywords.length && p.recency !== "any") {
+    // "The first time I asked about X" / "the last time we talked about X": order the topic's matches by date.
+    const scores = await score();
+    for (const id of exclude) scores.delete(id);
+    const top = Math.max(0, ...scores.values());
+    const ids = [...scores.entries()].filter(([, v]) => v >= top / 2).map(([id]) => id);
+    const rows = (await turnsByIds(ids)).sort((a, b) => a.created_at.localeCompare(b.created_at));
+    const pick = p.recency === "first" ? rows.slice(0, 2) : rows.slice(-2);
+    chosen = pick;
+    if (pick.length) note = `${unreadNote}These are the ${p.recency === "first" ? "earliest" : "most recent"} conversations about this topic (of ${rows.length} that match). Say the date.`;
   } else if (keywords.length) {
     // No date: find the topic first, then read the dates off the matches.
     const fallback = await topicFirst();
     if (fallback.level !== "low") chosen = fallback.turns;
     if (fallback.level === "medium") {
       status = "confirm";
-      note = confirmNote(fallback.turns, "");
+      note = confirmNote(fallback.turns, unreadNote);
+    } else if (fallback.level === "high") {
+      note = `${unreadNote}Found by topic. Say the date of each record you use.`;
     }
+  } else if (span) {
+    // "What did we talk about last time?" with no topic and no date: the latest (or earliest) earlier chats.
+    const anchor = p.recency === "first" ? span.first : span.last;
+    chosen = (await nearestTurns(anchor, 3, exclude)).sort((a, b) => b.created_at.localeCompare(a.created_at));
+    if (chosen.length) note = `${unreadNote}No topic or date given; these are the user's ${p.recency === "first" ? "earliest" : "most recent"} earlier conversations. Say their dates.`;
   }
 
   // De-duplicate, then order chronologically (reads naturally, and stable refs).
@@ -249,6 +273,19 @@ function fitBudget(turns: RecalledTurn[]): RecalledTurn[] {
   turns = turns.map((t) => ({ ...t, claims: t.claims.map(({ evidence_excerpt: _e, ...c }) => c) }));
   while (size() > BUNDLE_CHARS && turns.length > 1) turns = turns.slice(0, -1);
   return turns;
+}
+
+/**
+ * Choose turns from a long range when the topic gave no ranking: the newest for "before that",
+ * the oldest for "after that", otherwise spread evenly so a month isn't just its first eight chats.
+ */
+export function pickFromRange<T extends { created_at: string }>(turns: T[], n: number, expr = ""): T[] {
+  const sorted = [...turns].sort((a, b) => a.created_at.localeCompare(b.created_at));
+  if (sorted.length <= n) return sorted;
+  if (/\bbefore that\b/i.test(expr)) return sorted.slice(-n);
+  if (/\bafter that\b/i.test(expr)) return sorted.slice(0, n);
+  const step = (sorted.length - 1) / (n - 1);
+  return Array.from({ length: n }, (_, i) => sorted[Math.round(i * step)]!);
 }
 
 function rangeLabel(r: DateRange): string {

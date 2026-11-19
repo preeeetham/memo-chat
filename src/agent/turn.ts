@@ -8,7 +8,8 @@ import { publishJob } from "../memory/jobs";
 import { SearchSession } from "../search/tool";
 import type { ChatEvent } from "../sse";
 import { describeNow, localDate, safeTz, shortLabel } from "../time/local";
-import { guessedResolutions, resolveAll, unresolvedExpressions } from "../time/resolve";
+import { addDays } from "../time/local";
+import { guessedResolutions, resolveAll, unresolvedExpressions, type Resolution } from "../time/resolve";
 import { renderContext } from "./bundle";
 import { runLoop } from "./loop";
 import { embed } from "../llm/embed";
@@ -62,6 +63,12 @@ export async function runTurn(input: TurnInput, emit: (e: ChatEvent) => void, si
   const unresolved = unresolvedExpressions(p.time_expressions, at, tz);
   const guessed = guessedResolutions(p.date_guesses ?? [], unresolved, at, tz).filter((g) => !resolutions.some((r) => r.expr === g.expr));
   resolutions.push(...guessed);
+  // "before that" / "after that" point at the conversation this chat last recalled.
+  const rel = relativeToLastRecall(text, prior, localDate(at, tz));
+  if (rel) {
+    resolutions.push(rel);
+    p.needs_memory = true;
+  }
   const bundle = await recall(p, resolutions, conv.id, queryEmbedding);
   mark("recall");
   emit({
@@ -151,6 +158,37 @@ function replayHistory(rows: MessageRow[]): ChatCompletionMessageParam[] {
   const userIdx = rows.map((r, i) => (r.role === "user" ? i : -1)).filter((i) => i >= 0);
   const from = userIdx.length > n ? userIdx[userIdx.length - n]! : 0;
   return rows.slice(from).flatMap((r) => JSON.parse(r.content_json) as ChatCompletionMessageParam[]);
+}
+
+/**
+ * "What did we discuss before that?": a range just before (or after) the dates this chat's last
+ * recall used, read from the stored answer's metadata. Null when the message has no such phrase
+ * or nothing was recalled in this chat yet.
+ */
+export function relativeToLastRecall(text: string, prior: Pick<MessageRow, "role" | "meta_json">[], today: string): Resolution | null {
+  const m = text.match(/\b(before|after) that\b/i);
+  if (!m) return null;
+  for (const row of [...prior].reverse()) {
+    if (row.role !== "assistant" || !row.meta_json) continue;
+    let meta: { memory?: { recalled?: Array<{ local_date: string }>; resolved?: Array<{ date: string }> } };
+    try {
+      meta = JSON.parse(row.meta_json);
+    } catch {
+      continue;
+    }
+    const dates = [
+      ...(meta.memory?.recalled ?? []).map((r) => r.local_date),
+      ...(meta.memory?.resolved ?? []).flatMap((r) => r.date.split("..")),
+    ].filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+    if (!dates.length) continue;
+    const expr = `${m[1]!.toLowerCase()} that`;
+    const c = m[1]!.toLowerCase() === "before"
+      ? { start: addDays(dates[0]!, -30), end: addDays(dates[0]!, -1) }
+      : { start: addDays(dates[dates.length - 1]!, 1), end: today };
+    if (c.start > c.end) return null;
+    return { expr, label: `${expr} (${c.start} to ${c.end})`, candidates: [c] };
+  }
+  return null;
 }
 
 function memoryStatus(b: Awaited<ReturnType<typeof recall>>): string | null {
