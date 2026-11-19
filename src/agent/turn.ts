@@ -2,7 +2,7 @@
 import type { ChatCompletionMessageParam, ReasoningEffort } from "openai/resources";
 import { now } from "../clock";
 import { config } from "../config";
-import { createConversation, getConversation, getMessages, insertMessage, setConversationTitle, type MessageRow } from "../db/repo";
+import { createConversation, forgetTurns, getConversation, getMessages, insertMessage, setConversationTitle, type MessageRow } from "../db/repo";
 import { newId } from "../ids";
 import { publishJob } from "../memory/jobs";
 import { SearchSession } from "../search/tool";
@@ -69,7 +69,26 @@ export async function runTurn(input: TurnInput, emit: (e: ChatEvent) => void, si
     resolutions.push(rel);
     p.needs_memory = true;
   }
+  // "Forget X": find what matches and ask first; forget only on the user's yes in the next message.
+  const notes: string[] = [];
+  let pendingForget: string[] | undefined;
+  const pending = pendingForgetIn(prior);
+  if (pending.length && isAffirmative(text)) {
+    const n = await forgetTurns(pending, at.toISOString());
+    notes.push(`You have just removed ${n} earlier ${n === 1 ? "conversation" : "conversations"} from your memory, as the user confirmed. Tell them it's done, and that the chats themselves stay visible unless they delete them.`);
+    p.needs_memory = false;
+  } else if (wantsToForget(text)) {
+    p.needs_memory = true;
+  }
   const bundle = await recall(p, resolutions, conv.id, queryEmbedding);
+  if (wantsToForget(text) && !(pending.length && isAffirmative(text))) {
+    if (bundle.turns.length) {
+      pendingForget = bundle.turns.map((t) => t.assistant_id);
+      notes.push(`The user wants you to forget something. The records below are what matches. Do not use their content. List them by date and topic and ask the user to reply "yes" to forget them; nothing is forgotten until they confirm. The chats stay visible; only your memory of them goes.`);
+    } else {
+      notes.push("The user wants you to forget something, but nothing in your memory matches. Say so, and ask what exactly to forget.");
+    }
+  }
   mark("recall");
   emit({
     type: "memory",
@@ -88,7 +107,7 @@ export async function runTurn(input: TurnInput, emit: (e: ChatEvent) => void, si
   else if (p.task !== "chat") emit({ type: "status", text: "Thinking…" });
 
   // 5. Main model loop.
-  const contextNote: ChatCompletionMessageParam = { role: "system", content: renderContext(nowLine, bundle) };
+  const contextNote: ChatCompletionMessageParam = { role: "system", content: renderContext(nowLine, bundle, notes) };
   const effort: ReasoningEffort = p.source === "fast_path" ? "minimal" : p.task === "chat" || p.task === "recall_only" ? "low" : p.task === "recall_and_verify" ? "high" : "medium";
   const search = new SearchSession(assistantId, tz);
   const result = await runLoop({
@@ -136,6 +155,7 @@ export async function runTurn(input: TurnInput, emit: (e: ChatEvent) => void, si
         searches: result.searches,
         tokens: result.tokens,
         fallbackModel: result.fallbackModel,
+        pendingForget,
       },
     },
     trivial ? undefined : { type: "extract_turn", payload: { assistantMessageId: assistantId } },
@@ -189,6 +209,30 @@ export function relativeToLastRecall(text: string, prior: Pick<MessageRow, "role
     return { expr, label: `${expr} (${c.start} to ${c.end})`, candidates: [c] };
   }
   return null;
+}
+
+const NOT_FORGET = /\b(don'?t|do not|never|won'?t|didn'?t) forget\b|\bforgot\b|^\s*(forget it|never ?mind)\b/i;
+
+/** "Forget what I told you about Neon", "remove our CRM chat from your memory" (not "don't forget", not "forget it"). */
+export function wantsToForget(text: string): boolean {
+  if (NOT_FORGET.test(text)) return false;
+  return /\bforget\b/i.test(text) || /\b(erase|wipe|remove|delete)\b.*\b(from|out of) (your )?memory\b|\bstop remembering\b/i.test(text);
+}
+
+export function isAffirmative(text: string): boolean {
+  return /^\s*(yes|yeah|yep|yup|sure|ok(ay)?|confirm(ed)?|do it|go ahead|please do|forget (them|it|those|that))\b/i.test(text);
+}
+
+/** Turn ids the previous answer offered to forget, if the user has not answered yet. */
+export function pendingForgetIn(prior: Pick<MessageRow, "role" | "meta_json">[]): string[] {
+  const last = [...prior].reverse().find((r) => r.role === "assistant");
+  if (!last?.meta_json) return [];
+  try {
+    const ids = (JSON.parse(last.meta_json) as { pendingForget?: unknown }).pendingForget;
+    return Array.isArray(ids) ? ids.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 function memoryStatus(b: Awaited<ReturnType<typeof recall>>): string | null {

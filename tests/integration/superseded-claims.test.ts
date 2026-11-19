@@ -75,3 +75,46 @@ describe.skipIf(!available)("superseded claims", () => {
     expect(second).toBeTruthy();
   });
 });
+
+describe.skipIf(!available)("forget on request", () => {
+  let env: Awaited<ReturnType<typeof freshDatabase>>;
+  let db: typeof import("../../src/db/index");
+  let repo: typeof import("../../src/db/repo");
+  let recall: typeof import("../../src/agent/recall").recall;
+  const U = "pw|forget";
+  let neon = "";
+
+  beforeAll(async () => {
+    env = await freshDatabase("forget");
+    process.env.DATABASE_URL = env.appUrl;
+    db = await import("../../src/db/index");
+    await db.closePool();
+    repo = await import("../../src/db/repo");
+    ({ recall } = await import("../../src/agent/recall"));
+    const auth = await import("../../src/auth");
+    await auth.ensureUser({ id: U, name: "rishi" }, "pw", "forget");
+    await db.asUser(U, async () => {
+      const conv = await repo.createConversation("Neon", "2026-11-03T06:00:00Z");
+      const u = await repo.insertMessage({ conversation_id: conv.id, role: "user", text: "We picked Neon for Postgres hosting", content_json: "[]", created_at: "2026-11-03T06:00:00Z", tz: TZ, local_date: "2026-11-03", reply_to: null });
+      const a = await repo.insertMessage({ conversation_id: conv.id, role: "assistant", text: "Noted: Neon.", content_json: "[]", created_at: "2026-11-03T06:00:05Z", tz: TZ, local_date: "2026-11-03", reply_to: u.id });
+      neon = a.id;
+      await repo.saveExtraction({ assistantId: a.id, conversationId: conv.id, localDate: "2026-11-03", createdAt: "2026-11-03T06:00:05Z" }, { question: "Neon", answer_summary: "Neon", entities: ["Neon"], keywords: ["postgres"] }, [
+        { assistant_message_id: a.id, speaker: "user", subject: "Postgres hosting provider", attribute: "decision", value: "Neon", observed_at: "2026-11-03", published_at: null, source_url: null, evidence_id: null },
+      ]);
+    });
+  });
+  afterAll(async () => {
+    await db?.closePool();
+    await env?.drop();
+  });
+
+  const plan = { task: "recall_only" as const, needs_memory: true, time_expressions: [], topic_keywords: ["Neon", "Postgres"], entities: [], needs_web: false, date_guesses: [], recency: "any" as const, source: "model" as const };
+
+  it("forgotten turns leave recall, but the chat itself stays", async () => {
+    expect((await db.asUser(U, () => recall(plan, [], "c_x"))).turns).toHaveLength(1);
+    expect(await db.asUser(U, () => repo.forgetTurns([neon], "2026-11-19T06:00:00Z"))).toBe(1);
+    expect((await db.asUser(U, () => recall(plan, [], "c_x"))).turns).toHaveLength(0);
+    expect(await db.asUser(U, () => repo.getMessage(neon))).toBeTruthy();
+    expect(await db.asUser(U, () => repo.claimsFor([neon]))).toEqual([]);
+  });
+});

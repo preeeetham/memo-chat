@@ -231,7 +231,7 @@ const TURN_SELECT = `
   FROM messages a
   JOIN messages u ON u.user_id = a.user_id AND u.id = a.reply_to
   JOIN conversations c ON c.user_id = a.user_id AND c.id = a.conversation_id
-  WHERE a.role = 'assistant'`;
+  WHERE a.role = 'assistant' AND a.forgotten_at IS NULL`;
 
 export async function turnsInRange(start: string, end: string, excludeAssistantIds: string[]): Promise<TurnRow[]> {
   return q(`${TURN_SELECT} AND u.local_date BETWEEN $1 AND $2 AND NOT (a.id = ANY($3)) ORDER BY u.created_at`, [start, end, excludeAssistantIds]);
@@ -355,6 +355,11 @@ export async function scoreTurnsDetailed(
         s.sim = Math.max(s.sim ?? 0, Number(h.sim));
       }
     }
+    // Turns the user asked to forget never come back, whichever list found them.
+    if (scores.size) {
+      const gone = await run<{ id: string }>("SELECT id FROM messages WHERE id = ANY($1) AND forgotten_at IS NOT NULL", [[...scores.keys()]]);
+      for (const g of gone) scores.delete(g.id);
+    }
   });
   return scores;
 }
@@ -375,6 +380,22 @@ export async function claimsFor(assistantIds: string[]): Promise<ClaimRow[]> {
      WHERE c.assistant_message_id = ANY($1) ORDER BY c.created_at, c.seq`,
     [assistantIds],
   );
+}
+
+/**
+ * Forget turns on request: they stay visible in their chat, but leave memory. Their summaries,
+ * vectors and claims are deleted, and anything their claims had retired becomes current again.
+ */
+export async function forgetTurns(assistantIds: string[], at: string): Promise<number> {
+  if (!assistantIds.length) return 0;
+  return tx(async (run) => {
+    const ids = assistantIds;
+    await run("UPDATE claims SET superseded_by = NULL, superseded_at = NULL WHERE superseded_by IN (SELECT id FROM claims WHERE assistant_message_id = ANY($1))", [ids]);
+    await run("DELETE FROM claims WHERE assistant_message_id = ANY($1)", [ids]);
+    await run("DELETE FROM turn_digests WHERE assistant_message_id = ANY($1)", [ids]);
+    const done = await run("UPDATE messages SET forgotten_at = $2 WHERE id = ANY($1) AND role = 'assistant' AND forgotten_at IS NULL RETURNING id", [ids, at]);
+    return done.length;
+  });
 }
 
 /** Current (not superseded) decisions and shortlists, so extraction can reuse their subject names. */
@@ -399,7 +420,7 @@ export async function saveExtraction(
   await tx(async (run) => {
     // The turn may have been removed by an edit while the model was extracting: then save nothing.
     // FOR SHARE makes a concurrent edit wait for this save, so it removes these rows too.
-    if (!(await run("SELECT 1 FROM messages WHERE id = $1 FOR SHARE", [turn.assistantId])).length) return;
+    if (!(await run("SELECT 1 FROM messages WHERE id = $1 AND forgotten_at IS NULL FOR SHARE", [turn.assistantId])).length) return;
     // Idempotent: a retried job replaces its own rows.
     await run("UPDATE claims SET superseded_by = NULL, superseded_at = NULL WHERE superseded_by IN (SELECT id FROM claims WHERE assistant_message_id = $1)", [turn.assistantId]);
     await run("DELETE FROM claims WHERE assistant_message_id = $1", [turn.assistantId]);
