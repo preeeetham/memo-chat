@@ -143,3 +143,40 @@ describe("findTimeExpressions: longer phrases win", () => {
   it("3 weeks ago on Tuesday", () => expect(findTimeExpressions("3 weeks ago on Tuesday I asked")).toEqual(["3 weeks ago on tuesday"]));
   it("past week and last weekend", () => expect(findTimeExpressions("in the past week or last weekend")).toEqual(["in the past week", "last weekend"]));
 });
+
+describe("resolve: months, years and quarters (today is Wed 11 Nov)", () => {
+  const R = (s: string, e: string) => ({ start: s, end: e });
+  it("a month ago -> about 11 Oct", () => expect(r("a month ago")).toEqual([R("2026-10-01", "2026-10-21")]));
+  it("2 months ago", () => expect(r("2 months ago")).toEqual([R("2026-09-01", "2026-09-21")]));
+  it("a couple of months ago", () => expect(r("a couple of months ago")).toEqual([R("2026-09-01", "2026-09-21")]));
+  it("a few months ago", () => expect(r("a few months ago")).toEqual([R("2026-06-11", "2026-10-11")]));
+  it("the month before last", () => expect(r("the month before last")).toEqual([R("2026-09-01", "2026-09-30")]));
+  it("past month is the last 30 days", () => expect(r("in the past month")).toEqual([R("2026-10-12", "2026-11-11")]));
+  it("last month is still the calendar month", () => expect(r("last month")).toEqual([R("2026-10-01", "2026-10-31")]));
+  it("early last month", () => expect(r("early last month")).toEqual([R("2026-10-01", "2026-10-11")]));
+  it("mid last month", () => expect(r("mid last month")).toEqual([R("2026-10-12", "2026-10-22")]));
+  it("end of last month", () => expect(r("end of last month")).toEqual([R("2026-10-23", "2026-10-31")]));
+  it("earlier this month", () => expect(r("earlier this month")).toEqual([R("2026-11-01", "2026-11-10")]));
+  it("first week of November", () => expect(r("first week of November")).toEqual([R("2026-11-01", "2026-11-07")]));
+  it("last week of last month", () => expect(r("the last week of last month")).toEqual([R("2026-10-25", "2026-10-31")]));
+  it("in October", () => expect(r("in October")).toEqual([R("2026-10-01", "2026-10-31")]));
+  it("in December -> last December", () => expect(r("in December")).toEqual([R("2025-12-01", "2025-12-31")]));
+  it("in November -> this month so far", () => expect(r("in November")).toEqual([R("2026-11-01", "2026-11-11")]));
+  it("last November -> a year ago", () => expect(r("last November")).toEqual([R("2025-11-01", "2025-11-30")]));
+  it("October 2025", () => expect(r("October 2025")).toEqual([R("2025-10-01", "2025-10-31")]));
+  it("mid October", () => expect(r("mid October")).toEqual([R("2026-10-12", "2026-10-22")]));
+  it("late September 2025", () => expect(r("late September 2025")).toEqual([R("2025-09-21", "2025-09-30")]));
+  it("start of the year", () => expect(r("at the start of the year")).toEqual([R("2026-01-01", "2026-05-02")]));
+  it("end of last year", () => expect(r("end of last year")).toEqual([R("2025-09-02", "2025-12-31")]));
+  it("earlier this year", () => expect(r("earlier this year")).toEqual([R("2026-01-01", "2026-11-11")]));
+  it("last year", () => expect(r("last year")).toEqual([R("2025-01-01", "2025-12-31")]));
+  it("a year ago", () => expect(r("a year ago")).toEqual([R("2025-10-22", "2025-12-01")]));
+  it("last quarter", () => expect(r("last quarter")).toEqual([R("2026-07-01", "2026-09-30")]));
+  it("Q1", () => expect(r("Q1")).toEqual([R("2026-01-01", "2026-03-31")]));
+  it("Q4 2025", () => expect(r("Q4 2025")).toEqual([R("2025-10-01", "2025-12-31")]));
+  it("a while back -> the past year, not the last week", () => expect(r("a while back")).toEqual([R("2025-11-11", "2026-11-04")]));
+  it("11 days back", () => expect(r("11 days back")[0]).toEqual(d("2026-10-31")));
+  it("'this may' is not a month", () => expect(findTimeExpressions("this may be wrong")).toEqual([]));
+  it("finds month phrases", () =>
+    expect(findTimeExpressions("a month ago, in October and at the start of the year")).toEqual(["a month ago", "in october", "the start of the year"]));
+});

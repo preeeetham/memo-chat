@@ -86,12 +86,6 @@ function part(r: DateRange, which: string): DateRange {
   return range(addDays(r.start, 2 * third), r.end);
 }
 
-/** Clamp a range so it does not run past today; null if it starts in the future. */
-function upToToday(r: DateRange, today: string): DateRange | null {
-  if (r.start > today) return null;
-  return range(r.start, minD(r.end, today));
-}
-
 /** The most recent past (or current) occurrence of month m, unless a year is given. `last` forces the year before when m is the current month. */
 function pastMonth(today: string, m: number, year?: number, last = false): DateRange {
   const [y, cm] = today.split("-").map(Number) as [number, number];
@@ -111,11 +105,6 @@ function labelFor(expr: string, candidates: DateRange[]): string {
   if (!first) return expr;
   const span = first.start === first.end ? shortLabel(first.start) : `${shortLabel(first.start)} to ${shortLabel(first.end)}`;
   return `${expr} (${span})`;
-}
-
-/** US-style month/day for numeric dates only in US timezones; day/month elsewhere (e.g. India, UK). */
-function monthFirst(tz: string): boolean {
-  return /^America\/(?!Sao_Paulo|Argentina|Bogota|Lima|Santiago|Caracas|Montevideo|La_Paz|Asuncion|Guayaquil)/.test(tz) || tz === "US/Pacific" || tz === "US/Eastern" || tz === "US/Central" || tz === "US/Mountain";
 }
 
 /**
@@ -186,6 +175,15 @@ export function resolve(expr: string, now: Date, tz: string): Resolution {
     return out([day(weekdayInWeek(today, wd, n)), day(addDays(previousWeekday(today, wd), -7 * n))]);
   }
 
+  const lastMonth = (() => { const [y, mo] = shiftMonth(ty, tm, 1); return monthRange(y, mo); })();
+  const thisMonth = monthRange(ty, tm);
+  // "first week of November", "the last week of last month"
+  if ((m = e.match(new RegExp(`\\b(first|1st|second|2nd|third|3rd|fourth|4th|last|final) week (?:of|in) (last month|this month|${MONTHS}(?: (\\d{4}))?)\\b`)))) {
+    const r = m[2] === "last month" ? lastMonth : m[2] === "this month" ? thisMonth : pastMonth(today, monthIndex(m[3]!), m[4] ? Number(m[4]) : undefined);
+    if (/last|final/.test(m[1]!)) return out([range(addDays(r.end, -6), r.end)]);
+    const k = ORDINALS[m[1]!]!;
+    return out([range(addDays(r.start, 7 * (k - 1)), minD(addDays(r.start, 7 * k - 1), r.end))]);
+  }
   // ---- Weeks --------------------------------------------------------------------------
   if (/\b(?:the )?week before last\b/.test(e)) {
     const start = addDays(isoWeekStart(today), -14);
@@ -231,27 +229,76 @@ export function resolve(expr: string, now: Date, tz: string): Resolution {
     return out(weekday(today) === wd ? [day(today), day(prev)] : [day(prev)]);
   }
 
-  if (/\blast month\b/.test(e)) {
-    const [y, mo] = today.split("-").map(Number) as [number, number];
-    const py = mo === 1 ? y - 1 : y;
-    const pm = mo === 1 ? 12 : mo - 1;
-    const start = `${py}-${String(pm).padStart(2, "0")}-01`;
-    const end = addDays(`${y}-${String(mo).padStart(2, "0")}-01`, -1);
-    return out([range(start, end)]);
+  // ---- Months -------------------------------------------------------------------------
+  // "early last month", "end of this month", "mid October", "late October 2025"
+  if ((m = e.match(new RegExp(`\\b${PART} (last month|this month|the month|${MONTHS}(?: (\\d{4}))?)\\b`)))) {
+    const r = m[2] === "last month" ? lastMonth : m[2] === "this month" || m[2] === "the month" ? thisMonth : pastMonth(today, monthIndex(m[3]!), m[4] ? Number(m[4]) : undefined);
+    return out([part(r, m[1]!)]);
   }
-  if (/\bthis month\b/.test(e)) return out([range(`${today.slice(0, 7)}-01`, today)]);
+  if (/\bearlier this month\b/.test(e)) return out([range(thisMonth.start, addDays(today, -1))]);
+  if (/\b(?:the )?month before last\b/.test(e)) {
+    const [y, mo] = shiftMonth(ty, tm, 2);
+    return out([monthRange(y, mo)]);
+  }
+  if ((m = e.match(new RegExp(`\\b${COUNT} months? (?:ago|back)\\b`)))) {
+    const d = monthsAgo(today, parseCount(m[1]!));
+    return out([range(addDays(d, -10), addDays(d, 10))]);
+  }
+  if (/\b(?:a few|few|several) months? (?:ago|back)\b/.test(e)) return out([range(monthsAgo(today, 5), monthsAgo(today, 1))]);
+  if (/\b(?:the|in the|over the|within the) (?:past|last) month\b|\bpast month\b|\blast 30 days\b/.test(e)) return out([range(addDays(today, -30), today)]);
+  if (/\b(?:the |in the |over the )?(?:past|last) (?:few|couple of|two|three|2|3|six|6) months\b/.test(e)) {
+    const n = /two|2|couple/.test(e) ? 2 : /six|6/.test(e) ? 6 : 3;
+    return out([range(monthsAgo(today, n), today)]);
+  }
+  if (/\blast month\b/.test(e)) return out([lastMonth]);
+  if (/\bthis month\b/.test(e)) return out([range(thisMonth.start, today)]);
+  // "in October", "last October", "October 2025", "during Sept"
+  if ((m = e.match(new RegExp(`\\b(in|during|last|this|back in) ${MONTHS}(?: (\\d{4}))?\\b`))) && !(m[2] === "may" && /^(last|this)$/.test(m[1]!) && !m[3])) {
+    return out([pastMonth(today, monthIndex(m[2]!), m[3] ? Number(m[3]) : undefined, m[1] === "last")]);
+  }
+  if ((m = e.match(new RegExp(`^(?:in |during )?${MONTHS} (\\d{4})$`)))) return out([monthRange(Number(m[2]), monthIndex(m[1]!))]);
+  if ((m = e.match(new RegExp(`^(?:the )?(january|february|march|april|june|july|august|september|october|november|december)$`)))) {
+    return out([pastMonth(today, monthIndex(m[1]!))]);
+  }
 
-  if ((m = e.match(/\b(\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten|a couple of|couple) days? ago\b/))) {
+  // ---- Quarters and years --------------------------------------------------------------
+  const quarter = (y: number, q: number) => range(ymd(y, 3 * q - 2, 1), ymd(y, 3 * q, daysInMonth(y, 3 * q)));
+  const curQ = Math.ceil(tm / 3);
+  if (/\blast quarter\b|\bprevious quarter\b/.test(e)) return out([curQ === 1 ? quarter(ty - 1, 4) : quarter(ty, curQ - 1)]);
+  if (/\bthis quarter\b/.test(e)) return out([quarter(ty, curQ)]);
+  if ((m = e.match(/\bq([1-4])(?:\s*(?:of\s*)?'?(\d{2,4}))?\b/))) {
+    const q = Number(m[1]);
+    const y = m[2] ? (m[2].length === 2 ? 2000 + Number(m[2]) : Number(m[2])) : q <= curQ ? ty : ty - 1;
+    return out([quarter(y, q)]);
+  }
+  const yearOf = (y: number) => range(ymd(y, 1, 1), ymd(y, 12, 31));
+  if ((m = e.match(new RegExp(`\\b${PART} (?:of )?(?:the year|this year|the year|last year|(\\d{4}))\\b`)))) {
+    const y = /last year/.test(e) ? ty - 1 : m[2] ? Number(m[2]) : ty;
+    return out([part(yearOf(y), m[1]!)]);
+  }
+  if (/\b(?:early|earlier) this year\b|\bearlier in the year\b/.test(e)) return out([range(ymd(ty, 1, 1), today)]);
+  if (/\b(?:this year|so far this year|year to date)\b/.test(e)) return out([range(ymd(ty, 1, 1), today)]);
+  if (/\blast year\b/.test(e)) return out([yearOf(ty - 1)]);
+  if ((m = e.match(new RegExp(`\\b(?:a|one|${COUNT_NC}) years? (?:ago|back)\\b`)))) {
+    const n = (e.match(new RegExp(`\\b${COUNT} years?`)) ?? [])[1];
+    const d = monthsAgo(today, 12 * (n ? parseCount(n) : 1));
+    return out([range(addDays(d, -20), addDays(d, 20))]);
+  }
+
+  // ---- N days/weeks ago, vague ----------------------------------------------------------
+  if ((m = e.match(/\b(\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|a couple of|couple) days? (?:ago|back)\b/))) {
     const d = addDays(today, -parseCount(m[1]!));
     return out([day(d), range(addDays(d, -1), addDays(d, 1))]);
   }
-  if ((m = e.match(/\b(\d+|a|an|one|two|three|four|five|six|a couple of|couple) weeks? ago\b/))) {
+  if ((m = e.match(/\b(\d+|a|an|one|two|three|four|five|six|a couple of|couple) weeks? (?:ago|back)\b/))) {
     const d = addDays(today, -7 * parseCount(m[1]!));
     return out([range(addDays(d, -3), addDays(d, 3))]);
   }
-  if (/\b(a few|few|several) days ago\b|\bthe other day\b|\bearlier this week\b/.test(e)) return out([range(addDays(today, -7), addDays(today, -1))]);
-  if (/\b(a few|few|several) weeks ago\b|\brecently\b|\bearlier\b|\blately\b/.test(e)) return out([range(addDays(today, -30), today)]);
+  if (/\b(a few|few|several) days (?:ago|back)\b|\bthe other day\b|\bearlier this week\b/.test(e)) return out([range(addDays(today, -7), addDays(today, -1))]);
+  if (/\b(a few|few|several) weeks (?:ago|back)\b|\brecently\b|\blately\b/.test(e)) return out([range(addDays(today, -30), today)]);
+  if (/\b(?:a while|some time|a long time|long) (?:ago|back)\b|\bmonths ago\b/.test(e)) return out([range(monthsAgo(today, 12), addDays(today, -7))]);
 
+  // ---- Absolute dates --------------------------------------------------------------------
   // Absolute dates: "3 November", "Nov 3", "11/3", "2026-11-03".
   const abs = absoluteDate(expr, today);
   if (abs) return out([day(abs)]);
@@ -289,16 +336,24 @@ export function findTimeExpressions(text: string): string[] {
     new RegExp(`\\b${W}(?:'s)?,? (?:on )?${WD}\\b`, "g"),
     new RegExp(`\\b${WD},? ${COUNT_NC} weeks? (?:ago|back)\\b`, "g"),
     new RegExp(`\\b${COUNT_NC} weeks? (?:ago|back),? (?:on )?(?:a |the )?${WD}\\b`, "g"),
+    new RegExp(`\\b(?:first|1st|second|2nd|third|3rd|fourth|4th|last|final) week (?:of|in) (?:last month|this month|${MON}(?: \\d{4})?)\\b`, "g"),
+    new RegExp(`\\b(?:early|the beginning of|beginning of|the start of|start of|mid|the middle of|middle of|late|the end of|end of) (?:last month|this month|the month|${MON}(?: \\d{4})?|(?:of )?(?:the year|this year|last year|\\d{4}))\\b`, "g"),
     /\b(?:the )?(?:week|month) before last\b/g,
     /\b(?:the |in the |over the |within the )?(?:past|last) (?:\d+|two|three|four|five|six|seven|ten|fourteen|few|couple of) (?:days|weeks|months)\b/g,
     /\b(?:the past week|past week|(?:in|over|within) the (?:past|last) (?:week|month)|the past month|past month|the last seven days|past 7 days|last 30 days)\b/g,
+    /\b(?:earlier this (?:week|month|year)|earlier in the year|so far this year|this year|last year|year to date)\b/g,
+    /\b(?:last|previous|this) quarter\b|\bq[1-4](?:\s*(?:of\s*)?'?\d{2,4})?\b/g,
     /\b(?:a )?fortnight ago\b|\bthe other (?:day|week)\b/g,
     /\b(?:last|this past|over the|on the|at the|this) weekend\b/g,
     /\b(?:\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|a couple of|couple|a few|few|several) (?:days?|weeks?|months?|years?) (?:ago|back)\b/g,
+    /\b(?:a while|some time|a long time|long) (?:ago|back)\b/g,
     /\b(earlier today|today|this (?:morning|afternoon|evening)|tonight|yesterday|last night|day before yesterday)\b/g,
     new RegExp(`\\b(?:last|this|on|past) ${WEEKDAY_RE}\\b`, "g"),
     /\b(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/g, // bare weekdays: full names only
     /\b(?:this|last) (?:week|month)\b/g,
+    new RegExp(`\\b(?:in|during|back in) ${MON}(?: \\d{4})?\\b`, "g"),
+    new RegExp(`\\b(?:last|this) (?!may\\b)${MON}\\b`, "g"),
+    /\b(?:january|february|march|april|june|july|august|september|october|november|december) \d{4}\b/g,
     /\b(?:the other day|earlier this week|recently|lately)\b/g,
     new RegExp(`\\b\\d{1,2}(?:st|nd|rd|th)? (?:of )?${MONTHS}(?: \\d{4})?\\b`, "g"),
     new RegExp(`\\b${MONTHS} \\d{1,2}(?:st|nd|rd|th)?(?:,? \\d{4})?\\b`, "g"),
