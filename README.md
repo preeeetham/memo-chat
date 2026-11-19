@@ -228,7 +228,7 @@ flowchart LR
 6. The answer and its memory-indexing job are written **in one transaction** (an outbox). The **worker** then extracts a digest, a claims ledger (what was said, the value, the source and when it was seen) and an embedding, so later turns can verify "is that still true?".
 7. Every streamed event is buffered in Redis with an id, so a dropped connection **resumes** where it left off.
 
-The many-user design target (sharding by user, hot/warm/cold history, an LLM gateway, multi-region) is drawn below and described in [DESIGN.md](DESIGN.md):
+The many-user design target (sharding by user, hot/warm/cold history, an LLM gateway, multi-region) is drawn below:
 
 <p align="center">
   <img src="docs/architecture-scaled.png" alt="Many-user architecture design: stateless app tier, shared services (Redis, LLM gateway, search gateway), Postgres sharded by user with row-level security, async extraction pipeline, observability" width="900" />
