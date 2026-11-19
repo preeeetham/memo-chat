@@ -45,3 +45,17 @@ describe("planner date guesses (Diwali, seasons)", () => {
     ]));
   it("drops malformed dates", () => expect(guessedResolutions([{ expr: "x", start: "Nov 5", end: "2026-11-12" }], ["x"], NOW, TZ)).toEqual([]));
 });
+
+describe("fallback keywords", () => {
+  it("drops question filler and the date itself", () => {
+    const p = fallbackPlan("What did I ask you on 3 November? Is your answer still correct today?");
+    expect(p.topic_keywords).toEqual([]);
+    expect(p.entities).toEqual([]);
+  });
+  it("keeps topic words and names", () => {
+    const p = fallbackPlan("Last Tuesday I asked you about Postgres hosting. Has any pricing changed?");
+    expect(p.topic_keywords).toEqual(expect.arrayContaining(["Postgres", "hosting", "pricing"]));
+    expect(p.topic_keywords).not.toContain("Tuesday");
+    expect(p.entities).toContain("Postgres");
+  });
+});

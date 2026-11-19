@@ -115,8 +115,9 @@ export async function recall(p: Plan, resolutions: Resolution[], conversationId:
   const vector = qvec ? { embedding: qvec, minSimilarity: config().embeddings.minSimilarity } : null;
   const score = (ids?: string[]) => (keywords.length ? scoreTurns(keywords, ids, vector) : Promise.resolve(new Map<string, number>()));
   /** Topic first, dates second: indexed full-text + vector lookup over all of this user's turns, judged for confidence. */
-  const topicFirst = async (): Promise<{ level: Confidence; turns: TurnRow[] }> => {
-    if (!keywords.length) return { level: "low", turns: [] };
+  // fts: the topic words literally appear in the best match (not just a vector neighbour).
+  const topicFirst = async (): Promise<{ level: Confidence; turns: TurnRow[]; fts: boolean }> => {
+    if (!keywords.length) return { level: "low", turns: [], fts: false };
     const detail = await scoreTurnsDetailed(keywords, undefined, vector);
     for (const id of exclude) detail.delete(id);
     const ids = [...detail.entries()].sort((a, b) => b[1].score - a[1].score).slice(0, TOPIC_CANDIDATES).map(([id]) => id);
@@ -124,7 +125,7 @@ export async function recall(p: Plan, resolutions: Resolution[], conversationId:
     const scored = rows.map((r) => ({ assistant_id: r.assistant_id, local_date: r.local_date, ...detail.get(r.assistant_id)! }));
     const { level, picks } = judgeConfidence(scored, Boolean(vector));
     const byId = new Map(rows.map((r) => [r.assistant_id, r]));
-    return { level, turns: picks.map((p) => byId.get(p.assistant_id)!).filter(Boolean) };
+    return { level, turns: picks.map((p) => byId.get(p.assistant_id)!).filter(Boolean), fts: Boolean(picks[0]?.fts) };
   };
   const confirmNote = (turns: TurnRow[], context: string) =>
     `${context}These earlier conversations match the topic, but not certainly enough to answer from. Don't answer from them yet: ask the user one short question naming each by date and topic (for example "Did you mean your chat on ${turns[0] ? turns[0].local_date : "that day"} about ...?"). When they confirm, answer from that record.`;
@@ -167,7 +168,10 @@ export async function recall(p: Plan, resolutions: Resolution[], conversationId:
         const wideScores = wideTurns.length ? await score(wideTurns.map((t) => t.assistant_id)) : new Map<string, number>();
         const wideMatched = wideTurns.filter((t) => (wideScores.get(t.assistant_id) ?? 0) > 0);
         const anyOnDay = perCandidate.find((c) => c.turns.length);
-        const fallback = wideMatched.length ? null : await topicFirst();
+        // Overriding a date the user named needs the topic words in the other chat; vector similarity
+        // alone is too loose (a filler-only question still lands "near" some chat).
+        const topic = wideMatched.length ? null : await topicFirst();
+        const fallback = topic?.fts ? topic : null;
         if (wideMatched.length) {
           chosen.push(...wideMatched.slice(0, MAX_TURNS_PER_DAY));
           note = `Nothing on ${rangeLabel(first)} matched; found a matching conversation one day off.`;

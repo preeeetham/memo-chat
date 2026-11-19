@@ -55,10 +55,25 @@ export function isFastPath(text: string): boolean {
   return GREETING.test(text);
 }
 
+/** Question words and chat filler: not topic words, so the regex fallback must not search memory for them. */
+const FILLER = new Set(
+  ("what when where which who whom whose why how did does do was were are is has have had can could would should will " +
+    "you your yours me my mine our ours we they them the and for with about from that this those these there then than " +
+    "ask asked asking tell told say said talk talked discuss discussed mention mentioned remember recall answer answered " +
+    "still correct right true again today now yet any some please just also chat conversation").split(" "),
+);
+
+/** Topic words for the regex fallback: no filler, and nothing already read as a time expression. */
+export function fallbackKeywords(text: string, time: string[]): string[] {
+  const inTime = new Set(time.flatMap((t) => t.toLowerCase().split(/\s+/)));
+  const words = (text.match(/[\p{L}\p{N}][\p{L}\p{N}.+-]{2,}/gu) ?? []).map((w) => w.replace(/\.+$/, ""));
+  return [...new Set(words)].filter((w) => !FILLER.has(w.toLowerCase()) && !inTime.has(w.toLowerCase()));
+}
+
 export function fallbackPlan(text: string): Plan {
   const time = findTimeExpressions(text);
   const needsMemory = time.length > 0 || looksLikeMemory(text);
-  const words = text.match(/[\p{L}\p{N}][\p{L}\p{N}.+-]{2,}/gu) ?? [];
+  const words = fallbackKeywords(text, time);
   return {
     task: needsMemory ? "recall_and_verify" : "research",
     needs_memory: needsMemory,
