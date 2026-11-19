@@ -100,3 +100,46 @@ describe("findTimeExpressions", () => {
   it("finds several", () =>
     expect(findTimeExpressions("yesterday and 2 days ago")).toEqual(["yesterday", "2 days ago"]));
 });
+
+describe("resolve: weekdays further back (today is Wed 11 Nov)", () => {
+  it("last to last Tuesday -> 3 Nov, then 27 Oct", () => expect(r("last to last Tuesday")).toEqual([d("2026-11-03"), d("2026-10-27")]));
+  it("the Tuesday before last", () => expect(r("the Tuesday before last")).toEqual([d("2026-11-03"), d("2026-10-27")]));
+  it("Tuesday before last", () => expect(r("tuesday before last")).toEqual([d("2026-11-03"), d("2026-10-27")]));
+  it("last but one Tuesday", () => expect(r("last but one Tuesday")).toEqual([d("2026-11-03"), d("2026-10-27")]));
+  it("two Tuesdays ago", () => expect(r("two Tuesdays ago")).toEqual([d("2026-11-03"), d("2026-10-27")]));
+  it("3 Fridays back", () => expect(r("3 fridays back")[0]).toEqual(d("2026-10-23")));
+  it("Tuesday last week", () => expect(r("Tuesday last week")).toEqual([d("2026-11-03")]));
+  it("last week on Tuesday", () => expect(r("last week on Tuesday")).toEqual([d("2026-11-03")]));
+  it("Friday of last week", () => expect(r("Friday of last week")).toEqual([d("2026-11-06")]));
+  it("Tuesday the week before last", () => expect(r("Tuesday the week before last")).toEqual([d("2026-10-27")]));
+  it("Monday this week", () => expect(r("Monday this week")).toEqual([d("2026-11-09")]));
+  it("Friday this week has not happened yet", () => expect(r("Friday this week")).toEqual([]));
+  it("3 weeks ago on Tuesday", () => expect(r("3 weeks ago on Tuesday")).toEqual([d("2026-10-20")]));
+  it("Tuesday two weeks ago", () => expect(r("Tuesday two weeks ago")).toEqual([d("2026-10-27")]));
+});
+
+describe("resolve: week ranges", () => {
+  it("the week before last (ISO)", () => expect(r("the week before last")).toEqual([{ start: "2026-10-26", end: "2026-11-01" }]));
+  it("past week is the last 7 days", () => expect(r("past week")).toEqual([{ start: "2026-11-04", end: "2026-11-11" }]));
+  it("in the last week is the last 7 days", () => expect(r("in the last week")).toEqual([{ start: "2026-11-04", end: "2026-11-11" }]));
+  it("last week is still the previous calendar week", () => expect(r("last week")).toEqual([{ start: "2026-11-02", end: "2026-11-08" }]));
+  it("last few days", () => expect(r("last few days")).toEqual([{ start: "2026-11-07", end: "2026-11-11" }]));
+  it("past 3 days", () => expect(r("past 3 days")).toEqual([{ start: "2026-11-08", end: "2026-11-11" }]));
+  it("past 2 weeks", () => expect(r("the past 2 weeks")).toEqual([{ start: "2026-10-28", end: "2026-11-11" }]));
+  it("a fortnight ago", () => expect(r("a fortnight ago")).toEqual([{ start: "2026-10-25", end: "2026-10-31" }]));
+  it("the other week", () => expect(r("the other week")).toEqual([{ start: "2026-10-21", end: "2026-11-06" }]));
+  it("last weekend", () => expect(r("last weekend")).toEqual([{ start: "2026-11-07", end: "2026-11-08" }]));
+  it("over the weekend", () => expect(r("over the weekend")).toEqual([{ start: "2026-11-07", end: "2026-11-08" }]));
+  it("this weekend on a Sunday is Sat-Sun so far", () =>
+    expect(r("this weekend", new Date("2026-11-15T06:00:00Z"))).toEqual([{ start: "2026-11-14", end: "2026-11-15" }]));
+});
+
+describe("findTimeExpressions: longer phrases win", () => {
+  it("last to last Tuesday is one phrase", () =>
+    expect(findTimeExpressions("What did we discuss last to last Tuesday about CRMs?")).toEqual(["last to last tuesday"]));
+  it("Tuesday last week is one phrase", () => expect(findTimeExpressions("Tuesday last week we talked about Neon")).toEqual(["tuesday last week"]));
+  it("several", () =>
+    expect(findTimeExpressions("on Monday and the Tuesday before last")).toEqual(["on monday", "the tuesday before last"]));
+  it("3 weeks ago on Tuesday", () => expect(findTimeExpressions("3 weeks ago on Tuesday I asked")).toEqual(["3 weeks ago on tuesday"]));
+  it("past week and last weekend", () => expect(findTimeExpressions("in the past week or last weekend")).toEqual(["in the past week", "last weekend"]));
+});

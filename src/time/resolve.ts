@@ -10,18 +10,33 @@ export type Resolution = { expr: string; label: string; candidates: DateRange[] 
 
 const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 const WEEKDAY_RE = "(sun|mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?)(?:day)?";
+const WD = "(?:sun|mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?)(?:day)?"; // same, non-capturing
 const NUMBER_WORDS: Record<string, number> = {
   a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
-  couple: 2, "a couple of": 2,
+  eleven: 11, twelve: 12, couple: 2, "a couple of": 2, "a couple": 2,
 };
+const COUNT = "(\\d+|an?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|a couple of|a couple|couple)";
+const COUNT_NC = "(?:\\d+|an?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|a couple of|a couple|couple)";
 const MONTHS = "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
+const MON = "(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
+const MONTH_KEYS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+const ORDINALS: Record<string, number> = { first: 1, "1st": 1, second: 2, "2nd": 2, third: 3, "3rd": 3, fourth: 4, "4th": 4 };
+// "early/mid/late" parts of a month or year.
+const PART = "(early|beginning of|start of|the start of|the beginning of|mid|middle of|the middle of|late|end of|the end of)";
 
 const day = (d: string): DateRange => ({ start: d, end: d });
 const range = (start: string, end: string): DateRange => ({ start, end });
+const pad = (n: number) => String(n).padStart(2, "0");
+const ymd = (y: number, m: number, d: number) => `${y}-${pad(m)}-${pad(d)}`;
+const minD = (a: string, b: string) => (a < b ? a : b);
 
 function weekdayIndex(word: string): number {
   const w = word.toLowerCase().slice(0, 3);
   return WEEKDAYS.findIndex((x) => x.startsWith(w));
+}
+
+function monthIndex(word: string): number {
+  return MONTH_KEYS.indexOf(word.toLowerCase().slice(0, 3)) + 1; // 1..12
 }
 
 /** Most recent date strictly before `today` that falls on weekday `wd`. */
@@ -34,6 +49,55 @@ function previousWeekday(today: string, wd: number): string {
 /** Monday of the ISO week containing d. */
 function isoWeekStart(d: string): string {
   return addDays(d, -((weekday(d) + 6) % 7));
+}
+
+/** Weekday `wd` in the ISO week `weeksBack` weeks before the one containing today. */
+function weekdayInWeek(today: string, wd: number, weeksBack: number): string {
+  return addDays(isoWeekStart(today), -7 * weeksBack + ((wd + 6) % 7));
+}
+
+function daysInMonth(y: number, m: number): number {
+  return new Date(Date.UTC(y, m, 0)).getUTCDate();
+}
+
+function monthRange(y: number, m: number): DateRange {
+  return range(ymd(y, m, 1), ymd(y, m, daysInMonth(y, m)));
+}
+
+/** Year and month `n` months before (y, m). */
+function shiftMonth(y: number, m: number, n: number): [number, number] {
+  const idx = y * 12 + (m - 1) - n;
+  return [Math.floor(idx / 12), (idx % 12) + 1];
+}
+
+/** The same day of month, `n` months back (clamped to the month's length). */
+function monthsAgo(today: string, n: number): string {
+  const [y, m, d] = today.split("-").map(Number) as [number, number, number];
+  const [py, pm] = shiftMonth(y, m, n);
+  return ymd(py, pm, Math.min(d, daysInMonth(py, pm)));
+}
+
+/** First, middle or last third of a range. */
+function part(r: DateRange, which: string): DateRange {
+  const len = Math.round((Date.parse(r.end) - Date.parse(r.start)) / 86_400_000) + 1;
+  const third = Math.ceil(len / 3);
+  if (/early|beginning|start/.test(which)) return range(r.start, addDays(r.start, third - 1));
+  if (/mid|middle/.test(which)) return range(addDays(r.start, third), addDays(r.start, 2 * third - 1));
+  return range(addDays(r.start, 2 * third), r.end);
+}
+
+/** Clamp a range so it does not run past today; null if it starts in the future. */
+function upToToday(r: DateRange, today: string): DateRange | null {
+  if (r.start > today) return null;
+  return range(r.start, minD(r.end, today));
+}
+
+/** The most recent past (or current) occurrence of month m, unless a year is given. `last` forces the year before when m is the current month. */
+function pastMonth(today: string, m: number, year?: number, last = false): DateRange {
+  const [y, cm] = today.split("-").map(Number) as [number, number];
+  if (year) return monthRange(year, m);
+  const yy = m < cm || (m === cm && !last) ? y : y - 1;
+  return monthRange(yy, m);
 }
 
 function parseCount(s: string): number {
@@ -49,14 +113,30 @@ function labelFor(expr: string, candidates: DateRange[]): string {
   return `${expr} (${span})`;
 }
 
+/** US-style month/day for numeric dates only in US timezones; day/month elsewhere (e.g. India, UK). */
+function monthFirst(tz: string): boolean {
+  return /^America\/(?!Sao_Paulo|Argentina|Bogota|Lima|Santiago|Caracas|Montevideo|La_Paz|Asuncion|Guayaquil)/.test(tz) || tz === "US/Pacific" || tz === "US/Eastern" || tz === "US/Central" || tz === "US/Mountain";
+}
+
 /**
  * Resolve one time expression relative to `now` in timezone `tz`.
  * Returns candidates in order of likelihood; empty if the expression is not a time reference we understand.
  */
 export function resolve(expr: string, now: Date, tz: string): Resolution {
-  const e = expr.trim().toLowerCase().replace(/[?.!,]+$/g, "").replace(/\s+/g, " ");
+  const e = expr.trim().toLowerCase().replace(/[?.!,]+$/g, "").replace(/’/g, "'").replace(/\s+/g, " ");
   const today = localDate(now, tz);
-  const out = (candidates: DateRange[]): Resolution => ({ expr: expr.trim(), label: labelFor(expr.trim(), candidates), candidates });
+  const [ty, tm] = today.split("-").map(Number) as [number, number];
+  const out = (candidates: Array<DateRange | null>): Resolution => {
+    const seen = new Set<string>();
+    const list = candidates.filter((c): c is DateRange => {
+      if (!c || c.start > today) return false;
+      const k = `${c.start}|${c.end}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    }).map((c) => range(c.start, minD(c.end, today)));
+    return { expr: expr.trim(), label: labelFor(expr.trim(), list), candidates: list };
+  };
   let m: RegExpMatchArray | null;
 
   // Before 5 am the user is usually still in "their" day: "this morning" or "today" at 1 am means the
@@ -68,6 +148,78 @@ export function resolve(expr: string, now: Date, tz: string): Resolution {
   if (/\blast night\b/.test(e)) return out([lateNight ? range(addDays(today, -1), today) : day(addDays(today, -1))]);
   if (/\byesterday\b/.test(e)) return out([day(addDays(today, -1))]);
 
+  // ---- Weekdays further back -------------------------------------------------------------
+  // "last to last Tuesday", "the last but one Tuesday", "the Tuesday before last"
+  if ((m = e.match(new RegExp(`\\b(?:last to last|last but one|the last but one|the one before last) ${WEEKDAY_RE}\\b`))) ||
+      (m = e.match(new RegExp(`\\b${WEEKDAY_RE} before last\\b`)))) {
+    const first = addDays(previousWeekday(today, weekdayIndex(m[1]!)), -7);
+    return out([day(first), day(addDays(first, -7))]);
+  }
+  // "two Tuesdays ago", "3 Tuesdays back"
+  if ((m = e.match(new RegExp(`\\b${COUNT} ${WEEKDAY_RE}s (?:ago|back)\\b`)))) {
+    const k = parseCount(m[1]!);
+    const first = addDays(previousWeekday(today, weekdayIndex(m[2]!)), -7 * (k - 1));
+    return out([day(first), day(addDays(first, -7))]);
+  }
+  // "Tuesday the week before last", "the week before last on Tuesday"
+  if ((m = e.match(new RegExp(`\\b${WEEKDAY_RE},? (?:of |in )?the week before last\\b`))) ||
+      (m = e.match(new RegExp(`\\bthe week before last(?:'s)?,? (?:on )?${WEEKDAY_RE}\\b`)))) {
+    return out([day(weekdayInWeek(today, weekdayIndex(m[1]!), 2))]);
+  }
+  // "Tuesday last week", "last week on Tuesday", "Tuesday of last week"
+  if ((m = e.match(new RegExp(`\\b${WEEKDAY_RE},? (?:of |in )?last week\\b`))) ||
+      (m = e.match(new RegExp(`\\blast week(?:'s)?,? (?:on )?${WEEKDAY_RE}\\b`)))) {
+    return out([day(weekdayInWeek(today, weekdayIndex(m[1]!), 1))]);
+  }
+  // "Tuesday this week", "this week on Tuesday"
+  if ((m = e.match(new RegExp(`\\b${WEEKDAY_RE},? (?:of )?this week\\b`))) ||
+      (m = e.match(new RegExp(`\\bthis week(?:'s)?,? (?:on )?${WEEKDAY_RE}\\b`)))) {
+    return out([day(weekdayInWeek(today, weekdayIndex(m[1]!), 0))]);
+  }
+  // "Tuesday 3 weeks ago", "3 weeks ago on Tuesday"
+  if ((m = e.match(new RegExp(`\\b${WEEKDAY_RE},? ${COUNT} weeks? (?:ago|back)\\b`)))) {
+    const wd = weekdayIndex(m[1]!), n = parseCount(m[2]!);
+    return out([day(weekdayInWeek(today, wd, n)), day(addDays(previousWeekday(today, wd), -7 * n))]);
+  }
+  if ((m = e.match(new RegExp(`\\b${COUNT} weeks? (?:ago|back),? (?:on )?(?:a |the )?${WEEKDAY_RE}\\b`)))) {
+    const wd = weekdayIndex(m[2]!), n = parseCount(m[1]!);
+    return out([day(weekdayInWeek(today, wd, n)), day(addDays(previousWeekday(today, wd), -7 * n))]);
+  }
+
+  // ---- Weeks --------------------------------------------------------------------------
+  if (/\b(?:the )?week before last\b/.test(e)) {
+    const start = addDays(isoWeekStart(today), -14);
+    return out([range(start, addDays(start, 6))]);
+  }
+  // "the past week", "in the last week", "the last 7 days", "past few days", "last few days"
+  if ((m = e.match(/\b(?:the |in the |over the |within the )?(?:past|last) (\d+|two|three|four|five|six|seven|ten|fourteen|few|couple of) days\b/))) {
+    const n = /few|couple/.test(m[1]!) ? 4 : parseCount(m[1]!) || 4;
+    return out([range(addDays(today, -n), today)]);
+  }
+  if (/\b(?:the past week|past week|(?:in|over|within) the (?:past|last) week|the last seven days|past 7 days)\b/.test(e)) return out([range(addDays(today, -7), today)]);
+  if ((m = e.match(/\b(?:the |in the |over the )?(?:past|last) (\d+|two|three|four|few|couple of) weeks\b/))) {
+    const n = /few|couple/.test(m[1]!) ? 3 : parseCount(m[1]!);
+    return out([range(addDays(today, -7 * n), today)]);
+  }
+  if (/\b(?:a )?fortnight ago\b/.test(e)) {
+    const d = addDays(today, -14);
+    return out([range(addDays(d, -3), addDays(d, 3))]);
+  }
+  if (/\bthe other week\b/.test(e)) return out([range(addDays(today, -21), addDays(today, -5))]);
+  if (/\bthis week\b/.test(e)) return out([range(isoWeekStart(today), today)]);
+  if (/\blast week\b/.test(e)) {
+    const start = addDays(isoWeekStart(today), -7);
+    return out([range(start, addDays(start, 6))]);
+  }
+  // "last weekend", "over the weekend", "this weekend"
+  if (/\b(?:last|this past|over the|on the|at the) weekend\b|\bthis weekend\b/.test(e)) {
+    const wd = weekday(today); // 0 Sun .. 6 Sat
+    if (/\bthis weekend\b/.test(e) && (wd === 6 || wd === 0)) return out([range(wd === 6 ? today : addDays(today, -1), today)]);
+    const sat = previousWeekday(wd === 0 ? addDays(today, -6) : today, 6);
+    return out([range(sat, addDays(sat, 1))]);
+  }
+
+  // ---- Weekdays (recent) -------------------------------------------------------------
   if ((m = e.match(new RegExp(`\\blast ${WEEKDAY_RE}\\b`)))) {
     const wd = weekdayIndex(m[1]!);
     const first = previousWeekday(today, wd);
@@ -79,11 +231,6 @@ export function resolve(expr: string, now: Date, tz: string): Resolution {
     return out(weekday(today) === wd ? [day(today), day(prev)] : [day(prev)]);
   }
 
-  if (/\bthis week\b/.test(e)) return out([range(isoWeekStart(today), today)]);
-  if (/\blast week\b/.test(e)) {
-    const start = addDays(isoWeekStart(today), -7);
-    return out([range(start, addDays(start, 6))]);
-  }
   if (/\blast month\b/.test(e)) {
     const [y, mo] = today.split("-").map(Number) as [number, number];
     const py = mo === 1 ? y - 1 : y;
@@ -128,16 +275,30 @@ function absoluteDate(expr: string, today: string): string | null {
 
 /**
  * Find time expressions in free text. Used as a deterministic backstop to the planner
- * (and as the whole mechanism when the planner is unavailable).
+ * (and as the whole mechanism when the planner is unavailable). Longer, more specific patterns
+ * come first so that "last to last Tuesday" is not also found as "last Tuesday".
  */
 export function findTimeExpressions(text: string): string[] {
-  const t = text.toLowerCase();
+  const t = text.toLowerCase().replace(/’/g, "'");
+  const W = "(?:last week|this week|the week before last)";
   const patterns = [
+    new RegExp(`\\b(?:last to last|last but one|the last but one|the one before last) ${WD}\\b`, "g"),
+    new RegExp(`\\b(?:the )?${WD} before last\\b`, "g"),
+    new RegExp(`\\b${COUNT_NC} ${WD}s (?:ago|back)\\b`, "g"),
+    new RegExp(`\\b${WD},? (?:of |in )?${W}\\b`, "g"),
+    new RegExp(`\\b${W}(?:'s)?,? (?:on )?${WD}\\b`, "g"),
+    new RegExp(`\\b${WD},? ${COUNT_NC} weeks? (?:ago|back)\\b`, "g"),
+    new RegExp(`\\b${COUNT_NC} weeks? (?:ago|back),? (?:on )?(?:a |the )?${WD}\\b`, "g"),
+    /\b(?:the )?(?:week|month) before last\b/g,
+    /\b(?:the |in the |over the |within the )?(?:past|last) (?:\d+|two|three|four|five|six|seven|ten|fourteen|few|couple of) (?:days|weeks|months)\b/g,
+    /\b(?:the past week|past week|(?:in|over|within) the (?:past|last) (?:week|month)|the past month|past month|the last seven days|past 7 days|last 30 days)\b/g,
+    /\b(?:a )?fortnight ago\b|\bthe other (?:day|week)\b/g,
+    /\b(?:last|this past|over the|on the|at the|this) weekend\b/g,
+    /\b(?:\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|a couple of|couple|a few|few|several) (?:days?|weeks?|months?|years?) (?:ago|back)\b/g,
     /\b(earlier today|today|this (?:morning|afternoon|evening)|tonight|yesterday|last night|day before yesterday)\b/g,
     new RegExp(`\\b(?:last|this|on|past) ${WEEKDAY_RE}\\b`, "g"),
     /\b(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/g, // bare weekdays: full names only
     /\b(?:this|last) (?:week|month)\b/g,
-    /\b(?:\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten|a couple of|couple|a few|few|several) (?:days?|weeks?) ago\b/g,
     /\b(?:the other day|earlier this week|recently|lately)\b/g,
     new RegExp(`\\b\\d{1,2}(?:st|nd|rd|th)? (?:of )?${MONTHS}(?: \\d{4})?\\b`, "g"),
     new RegExp(`\\b${MONTHS} \\d{1,2}(?:st|nd|rd|th)?(?:,? \\d{4})?\\b`, "g"),
@@ -148,8 +309,9 @@ export function findTimeExpressions(text: string): string[] {
   for (const re of patterns) {
     for (const m of t.matchAll(re)) {
       const i = m.index ?? 0;
-      // Skip spans already covered by a longer match (e.g. "monday" inside "last monday").
-      if (found.some((f) => i >= f.i && i < f.i + f.s.length)) continue;
+      const end = i + m[0].length;
+      // Skip spans that overlap one already found (earlier patterns are the more specific ones).
+      if (found.some((f) => i < f.i + f.s.length && end > f.i)) continue;
       found.push({ i, s: m[0] });
     }
   }
