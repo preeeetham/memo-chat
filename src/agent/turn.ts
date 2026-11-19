@@ -2,7 +2,7 @@
 import type { ChatCompletionMessageParam, ReasoningEffort } from "openai/resources";
 import { now } from "../clock";
 import { config } from "../config";
-import { createConversation, forgetTurns, getConversation, getMessages, insertMessage, setConversationTitle, type MessageRow } from "../db/repo";
+import { createConversation, digestsFor, forgetTurns, getConversation, getMessages, insertMessage, setConversationTitle, type MessageRow } from "../db/repo";
 import { newId } from "../ids";
 import { publishJob } from "../memory/jobs";
 import { SearchSession } from "../search/tool";
@@ -71,6 +71,8 @@ export async function runTurn(input: TurnInput, emit: (e: ChatEvent) => void, si
   }
   // "Forget X": find what matches and ask first; forget only on the user's yes in the next message.
   const notes: string[] = [];
+  const earlier = await earlierInChat(prior);
+  if (earlier) notes.push(earlier);
   let pendingForget: string[] | undefined;
   const pending = pendingForgetIn(prior);
   if (pending.length && isAffirmative(text)) {
@@ -170,6 +172,45 @@ export async function runTurn(input: TurnInput, emit: (e: ChatEvent) => void, si
 
   // 7. Extraction runs after the response, in the worker. Publishing is best effort; the worker's sweep covers a miss.
   await publishJob(saved.jobId);
+}
+
+const EARLIER_TURNS = 15;
+const EARLIER_CHARS = 3000;
+
+/**
+ * Long chats replay only the last N turns. The turns before that would otherwise vanish from the
+ * model's view, so they are summarised from their stored digests (or clipped text), newest first.
+ */
+async function earlierInChat(rows: MessageRow[]): Promise<string | null> {
+  const n = config().limits.historyTurns;
+  const userIdx = rows.map((r, i) => (r.role === "user" ? i : -1)).filter((i) => i >= 0);
+  if (userIdx.length <= n) return null;
+  const older = rows.slice(0, userIdx[userIdx.length - n]!);
+  const answers = older.filter((r) => r.role === "assistant").slice(-EARLIER_TURNS);
+  const digests = await digestsFor(answers.map((a) => a.id));
+  const byId = new Map(older.map((r) => [r.id, r]));
+  return summariseEarlier(
+    answers.map((a) => {
+      const d = digests.get(a.id);
+      const q = d?.question ?? byId.get(a.reply_to ?? "")?.text ?? "";
+      return { date: a.local_date, question: q, answer: d?.answer_summary ?? a.text };
+    }),
+    older.filter((r) => r.role === "user").length,
+  );
+}
+
+export function summariseEarlier(turns: Array<{ date: string; question: string; answer: string }>, total: number): string | null {
+  if (!turns.length) return null;
+  const clip = (s: string, k: number) => (s.length > k ? `${s.slice(0, k)}…` : s).replace(/\s+/g, " ");
+  const lines: string[] = [];
+  let size = 0;
+  for (const t of [...turns].reverse()) {
+    const line = `- ${t.date}: asked "${clip(t.question, 160)}"; you answered: ${clip(t.answer, 240)}`;
+    if (size + line.length > EARLIER_CHARS) break;
+    lines.push(line);
+    size += line.length;
+  }
+  return `Earlier in this chat (${total} older ${total === 1 ? "turn" : "turns"}, not shown in full; newest first):\n${lines.join("\n")}`;
 }
 
 /** This conversation's stored API messages, replayed unchanged (append-only), last N turns. */

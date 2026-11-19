@@ -18,3 +18,24 @@ describe("forget requests", () => {
     expect(pendingForgetIn(prior.slice(0, 2).concat([{ role: "assistant" as const, meta_json: "{}" }]))).toEqual([]);
   });
 });
+
+import { summariseEarlier } from "../src/agent/turn";
+
+describe("long chats: earlier turns are summarised, not dropped", () => {
+  it("nothing older -> null", () => expect(summariseEarlier([], 0)).toBeNull());
+  it("newest first, with dates", () => {
+    const s = summariseEarlier(
+      [
+        { date: "2026-11-01", question: "Shortlist CRMs", answer: "HubSpot, Pipedrive" },
+        { date: "2026-11-02", question: "Which is cheapest?", answer: "Pipedrive" },
+      ],
+      2,
+    )!;
+    expect(s).toMatch(/^Earlier in this chat \(2 older turns/);
+    expect(s.indexOf("2026-11-02")).toBeLessThan(s.indexOf("2026-11-01"));
+  });
+  it("stays within its size budget", () => {
+    const many = Array.from({ length: 50 }, (_, i) => ({ date: "2026-11-01", question: "q".repeat(300), answer: `a${i}`.repeat(100) }));
+    expect(summariseEarlier(many, 50)!.length).toBeLessThan(3300);
+  });
+});

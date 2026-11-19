@@ -372,6 +372,15 @@ export async function getDigest(assistantId: string): Promise<{ question: string
   return (await q<{ question: string; answer_summary: string }>("SELECT question, answer_summary FROM turn_digests WHERE assistant_message_id = $1", [assistantId]))[0];
 }
 
+export async function digestsFor(assistantIds: string[]): Promise<Map<string, { question: string; answer_summary: string }>> {
+  if (!assistantIds.length) return new Map();
+  const rows = await q<{ assistant_message_id: string; question: string; answer_summary: string }>(
+    "SELECT assistant_message_id, question, answer_summary FROM turn_digests WHERE assistant_message_id = ANY($1)",
+    [assistantIds],
+  );
+  return new Map(rows.map((r) => [r.assistant_message_id, { question: r.question, answer_summary: r.answer_summary }]));
+}
+
 export async function claimsFor(assistantIds: string[]): Promise<ClaimRow[]> {
   if (!assistantIds.length) return [];
   return q(
