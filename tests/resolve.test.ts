@@ -180,3 +180,20 @@ describe("resolve: months, years and quarters (today is Wed 11 Nov)", () => {
   it("finds month phrases", () =>
     expect(findTimeExpressions("a month ago, in October and at the start of the year")).toEqual(["a month ago", "in october", "the start of the year"]));
 });
+
+describe("resolve: numeric dates, ranges, holidays (today is Wed 11 Nov)", () => {
+  it("3/11 in India is 3 Nov, then 11 Mar", () => expect(r("3/11")).toEqual([d("2026-11-03"), d("2026-03-11")]));
+  it("3/11 in New York is 11 Mar, then 3 Nov", () => expect(r("3/11", NOW, "America/New_York")).toEqual([d("2026-03-11"), d("2026-11-03")]));
+  it("25/10 has only one reading", () => expect(r("25/10")).toEqual([d("2026-10-25")]));
+  it("3.11.2025", () => expect(r("3.11.2025")).toEqual([d("2025-11-03"), d("2025-03-11")]));
+  it("a time like 10.30 is not a date", () => expect(findTimeExpressions("at 10.30 we spoke")).toEqual([]));
+  it("between 3 and 5 November", () => expect(r("between 3 and 5 November")).toEqual([{ start: "2026-11-03", end: "2026-11-05" }]));
+  it("3-5 Nov", () => expect(r("3-5 Nov")).toEqual([{ start: "2026-11-03", end: "2026-11-05" }]));
+  it("on the 3rd", () => expect(r("on the 3rd")).toEqual([d("2026-11-03")]));
+  it("on the 20th -> last month", () => expect(r("on the 20th")).toEqual([d("2026-10-20")]));
+  it("on Christmas", () => expect(r("on Christmas")).toEqual([d("2025-12-25"), { start: "2025-12-22", end: "2025-12-28" }]));
+  it("around New Year", () => expect(r("around new year")).toEqual([{ start: "2025-12-28", end: "2026-01-05" }]));
+  it("on Halloween", () => expect(r("on halloween")[0]).toEqual(d("2026-10-31")));
+  it("finds ranges and holidays", () =>
+    expect(findTimeExpressions("between 3 and 5 November, on the 3rd, or around Christmas")).toEqual(["between 3 and 5 november", "on the 3rd", "around christmas"]));
+});

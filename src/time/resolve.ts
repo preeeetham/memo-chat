@@ -107,6 +107,11 @@ function labelFor(expr: string, candidates: DateRange[]): string {
   return `${expr} (${span})`;
 }
 
+/** US-style month/day for numeric dates only in US timezones; day/month elsewhere (e.g. India, UK). */
+function monthFirst(tz: string): boolean {
+  return /^America\/(?!Sao_Paulo|Argentina|Bogota|Lima|Santiago|Caracas|Montevideo|La_Paz|Asuncion|Guayaquil)/.test(tz) || tz === "US/Pacific" || tz === "US/Eastern" || tz === "US/Central" || tz === "US/Mountain";
+}
+
 /**
  * Resolve one time expression relative to `now` in timezone `tz`.
  * Returns candidates in order of likelihood; empty if the expression is not a time reference we understand.
@@ -299,7 +304,47 @@ export function resolve(expr: string, now: Date, tz: string): Resolution {
   if (/\b(?:a while|some time|a long time|long) (?:ago|back)\b|\bmonths ago\b/.test(e)) return out([range(monthsAgo(today, 12), addDays(today, -7))]);
 
   // ---- Absolute dates --------------------------------------------------------------------
-  // Absolute dates: "3 November", "Nov 3", "11/3", "2026-11-03".
+  // "between 3 and 5 November", "from 3 to 5 Nov", "3-5 November"
+  if ((m = e.match(new RegExp(`\\b(?:between |from )?(\\d{1,2})(?:st|nd|rd|th)?(?: and | to |\\s?-\\s?|\\s?–\\s?)(\\d{1,2})(?:st|nd|rd|th)? (?:of )?${MONTHS}(?: (\\d{4}))?\\b`)))) {
+    const mo = monthIndex(m[3]!);
+    const r = pastMonth(today, mo, m[4] ? Number(m[4]) : undefined);
+    const y = Number(r.start.slice(0, 4));
+    const a = Math.min(Number(m[1]), daysInMonth(y, mo)), b = Math.min(Number(m[2]), daysInMonth(y, mo));
+    return out([range(ymd(y, mo, Math.min(a, b)), ymd(y, mo, Math.max(a, b)))]);
+  }
+  // Numeric d/m or m/d: day first outside the US, with the other reading as a backup.
+  if ((m = e.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/)) || (m = e.match(/\b(\d{1,2})\.(\d{1,2})\.(\d{2,4})\b/))) {
+    const a = Number(m[1]), b = Number(m[2]);
+    const yr = m[3] ? (m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3])) : undefined;
+    const mk = (d: number, mo: number): string | null => {
+      if (mo < 1 || mo > 12 || d < 1) return null;
+      let y = yr ?? ty;
+      if (d > daysInMonth(y, mo)) return null;
+      if (!yr && ymd(y, mo, d) > today) y -= 1;
+      return d > daysInMonth(y, mo) ? null : ymd(y, mo, d);
+    };
+    const dayFirst = mk(a, b), monthFirstD = mk(b, a);
+    const order = monthFirst(tz) ? [monthFirstD, dayFirst] : [dayFirst, monthFirstD];
+    const cands = order.filter((x): x is string => Boolean(x)).map(day);
+    if (cands.length) return out(cands);
+  }
+  // "on the 3rd": the most recent past 3rd of a month.
+  if ((m = e.match(/\bon the (\d{1,2})(?:st|nd|rd|th)\b/))) {
+    const dd = Number(m[1]);
+    for (let k = 0; k < 3; k++) {
+      const [y, mo] = shiftMonth(ty, tm, k);
+      if (dd <= daysInMonth(y, mo) && ymd(y, mo, dd) <= today) return out([day(ymd(y, mo, dd))]);
+    }
+  }
+  // Fixed-date holidays ("on Christmas", "around New Year"); movable ones (Diwali, Eid) come from the planner's guess.
+  for (const [re, mo, dd] of HOLIDAYS) {
+    if (re.test(e)) {
+      const y = ymd(ty, mo, dd) <= today ? ty : ty - 1;
+      const d = ymd(y, mo, dd);
+      return out(/\baround\b|\bnear\b|\bbefore\b|\bafter\b/.test(e) ? [range(addDays(d, -4), addDays(d, 4))] : [day(d), range(addDays(d, -3), addDays(d, 3))]);
+    }
+  }
+  // "3 November", "Nov 3", "2026-11-03".
   const abs = absoluteDate(expr, today);
   if (abs) return out([day(abs)]);
 
@@ -320,6 +365,18 @@ function absoluteDate(expr: string, today: string): string | null {
   return fmt(yy);
 }
 
+const HOLIDAYS: Array<[RegExp, number, number]> = [
+  [/\bnew year'?s eve\b/, 12, 31],
+  [/\bchristmas eve\b/, 12, 24],
+  [/\b(?:christmas|xmas)\b/, 12, 25],
+  [/\bnew year'?s(?: day)?\b|\bnew year\b/, 1, 1],
+  [/\bvalentine'?s(?: day)?\b/, 2, 14],
+  [/\bhalloween\b/, 10, 31],
+  [/\bindependence day\b/, 8, 15],
+  [/\brepublic day\b/, 1, 26],
+];
+const HOLIDAY_RE = "(?:(?:around|on|at|near|before|after|during) )?(?:new year'?s eve|christmas eve|christmas|xmas|new year'?s(?: day)?|new year|valentine'?s(?: day)?|halloween|independence day|republic day)";
+
 /**
  * Find time expressions in free text. Used as a deterministic backstop to the planner
  * (and as the whole mechanism when the planner is unavailable). Longer, more specific patterns
@@ -338,6 +395,7 @@ export function findTimeExpressions(text: string): string[] {
     new RegExp(`\\b${COUNT_NC} weeks? (?:ago|back),? (?:on )?(?:a |the )?${WD}\\b`, "g"),
     new RegExp(`\\b(?:first|1st|second|2nd|third|3rd|fourth|4th|last|final) week (?:of|in) (?:last month|this month|${MON}(?: \\d{4})?)\\b`, "g"),
     new RegExp(`\\b(?:early|the beginning of|beginning of|the start of|start of|mid|the middle of|middle of|late|the end of|end of) (?:last month|this month|the month|${MON}(?: \\d{4})?|(?:of )?(?:the year|this year|last year|\\d{4}))\\b`, "g"),
+    /\b(?:between |from )?\d{1,2}(?:st|nd|rd|th)?(?: and | to |\s?-\s?|\s?–\s?)\d{1,2}(?:st|nd|rd|th)? (?:of )?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*(?: \d{4})?\b/g,
     /\b(?:the )?(?:week|month) before last\b/g,
     /\b(?:the |in the |over the |within the )?(?:past|last) (?:\d+|two|three|four|five|six|seven|ten|fourteen|few|couple of) (?:days|weeks|months)\b/g,
     /\b(?:the past week|past week|(?:in|over|within) the (?:past|last) (?:week|month)|the past month|past month|the last seven days|past 7 days|last 30 days)\b/g,
@@ -357,8 +415,11 @@ export function findTimeExpressions(text: string): string[] {
     /\b(?:the other day|earlier this week|recently|lately)\b/g,
     new RegExp(`\\b\\d{1,2}(?:st|nd|rd|th)? (?:of )?${MONTHS}(?: \\d{4})?\\b`, "g"),
     new RegExp(`\\b${MONTHS} \\d{1,2}(?:st|nd|rd|th)?(?:,? \\d{4})?\\b`, "g"),
+    /\bon the \d{1,2}(?:st|nd|rd|th)\b/g,
+    new RegExp(`\\b${HOLIDAY_RE}\\b`, "g"),
     /\b\d{4}-\d{2}-\d{2}\b/g,
     /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g,
+    /\b\d{1,2}\.\d{1,2}\.\d{2,4}\b/g,
   ];
   const found: Array<{ i: number; s: string }> = [];
   for (const re of patterns) {
