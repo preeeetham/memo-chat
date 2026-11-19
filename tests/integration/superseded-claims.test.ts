@@ -117,4 +117,19 @@ describe.skipIf(!available)("forget on request", () => {
     expect(await db.asUser(U, () => repo.getMessage(neon))).toBeTruthy();
     expect(await db.asUser(U, () => repo.claimsFor([neon]))).toEqual([]);
   });
+
+  it("lists every remembered turn of a chat, so forget covers its follow-ups", async () => {
+    const ids = await db.asUser(U, async () => {
+      const conv = await repo.createConversation("Supabase", "2026-11-05T06:00:00Z");
+      const ids: string[] = [];
+      for (const [i, q] of ["Compare Supabase plans", "We'll go with Supabase Pro"].entries()) {
+        const t = `2026-11-05T06:0${i}:00Z`;
+        const u = await repo.insertMessage({ conversation_id: conv.id, role: "user", text: q, content_json: "[]", created_at: t, tz: TZ, local_date: "2026-11-05", reply_to: null });
+        ids.push((await repo.insertMessage({ conversation_id: conv.id, role: "assistant", text: "Noted.", content_json: "[]", created_at: t, tz: TZ, local_date: "2026-11-05", reply_to: u.id })).id);
+      }
+      await repo.forgetTurns([ids[0]!], "2026-11-19T06:00:00Z");
+      return { all: ids, listed: await repo.turnIdsInConversations([conv.id]) };
+    });
+    expect(ids.listed).toEqual([ids.all[1]]);
+  });
 });

@@ -391,6 +391,13 @@ export async function claimsFor(assistantIds: string[]): Promise<ClaimRow[]> {
   );
 }
 
+/** Every remembered assistant turn in these chats: "forget" removes the chats it lists, not just their best-matching turn. */
+export async function turnIdsInConversations(conversationIds: string[]): Promise<string[]> {
+  if (!conversationIds.length) return [];
+  const rows = await q<{ id: string }>("SELECT id FROM messages WHERE conversation_id = ANY($1) AND role = 'assistant' AND forgotten_at IS NULL ORDER BY created_at", [conversationIds]);
+  return rows.map((r) => r.id);
+}
+
 /**
  * Forget turns on request: they stay visible in their chat, but leave memory. Their summaries,
  * vectors and claims are deleted, and anything their claims had retired becomes current again.

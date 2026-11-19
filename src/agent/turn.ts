@@ -2,7 +2,7 @@
 import type { ChatCompletionMessageParam, ReasoningEffort } from "openai/resources";
 import { now } from "../clock";
 import { config } from "../config";
-import { createConversation, digestsFor, forgetTurns, getConversation, getMessages, insertMessage, setConversationTitle, type MessageRow } from "../db/repo";
+import { createConversation, digestsFor, forgetTurns, turnIdsInConversations, getConversation, getMessages, insertMessage, setConversationTitle, type MessageRow } from "../db/repo";
 import { newId } from "../ids";
 import { publishJob } from "../memory/jobs";
 import { SearchSession } from "../search/tool";
@@ -75,18 +75,22 @@ export async function runTurn(input: TurnInput, emit: (e: ChatEvent) => void, si
   if (earlier) notes.push(earlier);
   let pendingForget: string[] | undefined;
   const pending = pendingForgetIn(prior);
-  if (pending.length && isAffirmative(text)) {
-    const n = await forgetTurns(pending, at.toISOString());
-    notes.push(`You have just removed ${n} earlier ${n === 1 ? "conversation" : "conversations"} from your memory, as the user confirmed. Tell them it's done, and that the chats themselves stay visible unless they delete them.`);
+  const confirmedForget = pending.length > 0 && isAffirmative(text);
+  if (confirmedForget) {
+    await forgetTurns(pending, at.toISOString());
+    notes.push(`You have just removed the chats you listed from your memory, as the user confirmed. Tell them it's done, and that the chats themselves stay visible unless they delete them.`);
     p.needs_memory = false;
   } else if (wantsToForget(text)) {
     p.needs_memory = true;
   }
   const bundle = await recall(p, resolutions, conv.id, queryEmbedding);
-  if (wantsToForget(text) && !(pending.length && isAffirmative(text))) {
+  const forgetRequest = wantsToForget(text) && !confirmedForget;
+  if (forgetRequest) {
     if (bundle.turns.length) {
-      pendingForget = bundle.turns.map((t) => t.assistant_id);
-      notes.push(`The user wants you to forget something. The records below are what matches. Do not use their content. List them by date and topic and ask the user to reply "yes" to forget them; nothing is forgotten until they confirm. The chats stay visible; only your memory of them goes.`);
+      // The whole chats, not only their best-matching turns: a follow-up like "we'll go with Neon" belongs to the topic too.
+      const chats = [...new Set(bundle.turns.map((t) => t.conversation_id))].filter((id) => id !== conv.id);
+      pendingForget = [...new Set([...bundle.turns.map((t) => t.assistant_id), ...(await turnIdsInConversations(chats))])];
+      notes.push(`The user wants you to forget something. The records below are what matches. Do not use their content. List the chats they come from by date and topic and ask the user to reply "yes" to forget those chats; nothing is forgotten until they confirm. The chats stay visible; only your memory of them goes.`);
     } else {
       notes.push("The user wants you to forget something, but nothing in your memory matches. Say so, and ask what exactly to forget.");
     }
@@ -162,6 +166,8 @@ export async function runTurn(input: TurnInput, emit: (e: ChatEvent) => void, si
     },
     trivial ? undefined : { type: "extract_turn", payload: { assistantMessageId: assistantId } },
   );
+  // The forget dialogue itself is not a memory of the topic: keep it out of recall and extraction.
+  if (forgetRequest || confirmedForget) await forgetTurns([assistantId], at.toISOString());
   let title: string | undefined;
   if (isNew) {
     title = text.length > 60 ? `${text.slice(0, 57)}…` : text;
