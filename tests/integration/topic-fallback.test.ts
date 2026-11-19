@@ -79,6 +79,14 @@ describe.skipIf(!available)("topic-first recall fallback", () => {
     const b = await db.asUser(USER, () => recall(p, resolveAll(p.time_expressions, AT, TZ), "c_new"));
     expect(b.turns.every((t) => t.local_date === "2026-11-17")).toBe(true);
   });
+
+  it("no topic words, only the second reading has chats: reads it as that day and says the first was empty", async () => {
+    const p = plan(["last to last Tuesday"], []); // 10 Nov (nothing) or 3 Nov (Neon)
+    const b = await db.asUser(USER, () => recall(p, resolveAll(p.time_expressions, AT, TZ), "c_new"));
+    expect(b.turns.map((t) => t.local_date)).toEqual(["2026-11-03"]);
+    expect(b.resolved[0]?.date).toBe("2026-11-03");
+    expect(b.note).toMatch(/Nothing on 2026-11-10/);
+  });
 });
 
 describe.skipIf(!available)("recall: first/latest, last time, unread phrases", () => {

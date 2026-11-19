@@ -190,7 +190,15 @@ export async function recall(p: Plan, resolutions: Resolution[], conversationId:
           // The user named the day; show what happened then even if the words differ.
           const oneDay = anyOnDay.range.start === anyOnDay.range.end;
           chosen.push(...pickFromRange(anyOnDay.turns, MAX_TURNS_PER_DAY, r.expr));
-          note = oneDay
+          // A later reading of the phrase ("last to last Tuesday" = 10 Nov, or 3 Nov): show it as what was read, and say why.
+          const otherReading = anyOnDay.range !== first;
+          if (otherReading) {
+            const k = resolutions.indexOf(r);
+            if (k >= 0) resolved[k] = { expr: r.expr, date: rangeLabel(anyOnDay.range) };
+          }
+          note = otherReading
+            ? `Nothing on ${rangeLabel(first)}; these are the conversations from ${rangeLabel(anyOnDay.range)}, the other reading of "${r.expr}". Tell the user there was nothing on ${rangeLabel(first)} and give each one's date.`
+            : oneDay
             ? `Conversations on ${rangeLabel(anyOnDay.range)} don't mention the topic keywords; showing everything from that day.`
             : anyOnDay.turns.length > MAX_TURNS_PER_DAY
               ? `There were ${anyOnDay.turns.length} conversations in ${rangeLabel(anyOnDay.range)}; showing ${MAX_TURNS_PER_DAY} spread across it. Give each one's date, and offer to look closer at any of them.`
