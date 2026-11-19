@@ -8,7 +8,7 @@ import { publishJob } from "../memory/jobs";
 import { SearchSession } from "../search/tool";
 import type { ChatEvent } from "../sse";
 import { describeNow, localDate, safeTz, shortLabel } from "../time/local";
-import { resolveAll } from "../time/resolve";
+import { guessedResolutions, resolveAll, unresolvedExpressions } from "../time/resolve";
 import { renderContext } from "./bundle";
 import { runLoop } from "./loop";
 import { embed } from "../llm/embed";
@@ -57,7 +57,11 @@ export async function runTurn(input: TurnInput, emit: (e: ChatEvent) => void, si
   mark("plan");
 
   // 3. Dates, in code.  4. Recall, in SQL.
+  // Phrases the code can't read (Diwali, "this summer") fall back to the planner's own date guess.
   const resolutions = resolveAll(p.time_expressions, at, tz);
+  const unresolved = unresolvedExpressions(p.time_expressions, at, tz);
+  const guessed = guessedResolutions(p.date_guesses ?? [], unresolved, at, tz).filter((g) => !resolutions.some((r) => r.expr === g.expr));
+  resolutions.push(...guessed);
   const bundle = await recall(p, resolutions, conv.id, queryEmbedding);
   mark("recall");
   emit({

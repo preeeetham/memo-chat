@@ -47,6 +47,8 @@ describe.skipIf(!available)("cross-chat recall by time", () => {
     topic_keywords: ["discussing", "whom"],
     entities: [],
     needs_web: false,
+    date_guesses: [],
+    recency: "any" as const,
     source: "model" as const,
   };
 

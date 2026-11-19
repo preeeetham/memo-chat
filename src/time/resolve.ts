@@ -377,6 +377,9 @@ const HOLIDAYS: Array<[RegExp, number, number]> = [
 ];
 const HOLIDAY_RE = "(?:(?:around|on|at|near|before|after|during) )?(?:new year'?s eve|christmas eve|christmas|xmas|new year'?s(?: day)?|new year|valentine'?s(?: day)?|halloween|independence day|republic day)";
 
+/** Phrases that point back in time without a date ("before", "previously"): searched by topic over all history. */
+export const VAGUE_PAST = /\b(previously|before|earlier|in the past|once|at some point|the first time|the last time|last time)\b/i;
+
 /**
  * Find time expressions in free text. Used as a deterministic backstop to the planner
  * (and as the whole mechanism when the planner is unavailable). Longer, more specific patterns
@@ -445,6 +448,39 @@ export function resolveAll(exprs: string[], now: Date, tz: string): Resolution[]
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(r);
+  }
+  return out;
+}
+
+/** Expressions the code could not turn into dates. */
+export function unresolvedExpressions(exprs: string[], now: Date, tz: string): string[] {
+  return exprs.filter((e) => !resolve(e, now, tz).candidates.length);
+}
+
+/**
+ * Date ranges the planner guessed for phrases the code could not read (movable holidays, seasons).
+ * Only well-formed ranges that are not in the future and not absurdly long are kept.
+ */
+export function guessedResolutions(
+  guesses: Array<{ expr: string; start: string; end: string }>,
+  unresolved: string[],
+  now: Date,
+  tz: string,
+): Resolution[] {
+  const today = localDate(now, tz);
+  const iso = /^\d{4}-\d{2}-\d{2}$/;
+  const out: Resolution[] = [];
+  for (const g of guesses) {
+    if (!iso.test(g.start) || !iso.test(g.end) || Number.isNaN(Date.parse(g.start)) || Number.isNaN(Date.parse(g.end))) continue;
+    const start = g.start <= g.end ? g.start : g.end;
+    let end = g.start <= g.end ? g.end : g.start;
+    if (start > today) continue;
+    if (end > today) end = today;
+    if (Date.parse(end) - Date.parse(start) > 400 * 86_400_000) continue;
+    const expr = unresolved.find((u) => u.toLowerCase().includes(g.expr.toLowerCase()) || g.expr.toLowerCase().includes(u.toLowerCase())) ?? g.expr;
+    if (!unresolved.length && !g.expr) continue;
+    const c = { start, end };
+    out.push({ expr, label: labelFor(expr, [c]), candidates: [c] });
   }
   return out;
 }

@@ -94,7 +94,7 @@ describe.skipIf(!available)("per-user isolation (row-level security)", () => {
   it("bob's recall finds nothing of alice's", async () => {
     const { recall } = await import("../../src/agent/recall");
     const { resolveAll } = await import("../../src/time/resolve");
-    const plan = { task: "recall_and_verify" as const, needs_memory: true, time_expressions: ["on Monday"], topic_keywords: ["CRM", "pricing"], entities: ["HubSpot"], needs_web: true, source: "model" as const };
+    const plan = { task: "recall_and_verify" as const, needs_memory: true, time_expressions: ["on Monday"], topic_keywords: ["CRM", "pricing"], entities: ["HubSpot"], needs_web: true, date_guesses: [], recency: "any" as const, source: "model" as const };
     const at = new Date("2026-11-11T08:35:00Z");
     const asAlice = await db.asUser(ALICE, () => recall(plan, resolveAll(plan.time_expressions, at, "Asia/Kolkata"), "c_none"));
     expect(asAlice.status).toBe("found");
