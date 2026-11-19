@@ -324,31 +324,22 @@ New tests cover cross-chat recall by time, just after midnight, and the empty-da
 
 | Item | Status |
 |---|---|
-| Live site | **https://memo-chat.up.railway.app** on Railway (app, worker, Postgres with pgvector, Redis), email/password and guest sign-in |
-| `main` on GitHub | Version 1, the single-user SQLite build |
-| `multi-user` branch | Version 2 plus the UI redesign, rename, icon, sign-in and welcome. Pushed to GitHub, **not yet merged into `main`**. |
-| GitHub repository | Still named `mini-chat`; rename to `memo-chat` pending |
-| Tests | 74 unit and integration tests pass; live smoke and memory checks pass |
+| Live site | **https://memo-chat.up.railway.app** on Railway (app, worker, Postgres with pgvector, Redis), with Google, GitHub (Firebase) and email/password sign-in |
+| GitHub repository | Renamed to **`memo-chat`**. `main` holds the current version (multi-user build, UI redesign, sign-in, editing, search); `multi-user` is kept in step with it |
+| `README.md` | Live link first, then setup for macOS and Windows (`docker compose up --build`), configuration, tests, architecture and a short version of this journey |
+| `DESIGN.md` | Written for version 2: how a turn works, why this shape, "considered and rejected", scaling beyond one machine, and "with another week" |
+| Tests | Unit tests (date resolution, auth, Firebase tokens, search gateway, limits) and integration tests on a real Postgres (per-user isolation, cross-chat recall by time, editing and truncation, accounts and linking); `npm run smoke`, `npm run eval` and the Locust load test as in section 3.6 |
 | `STRESS_TESTS.md` | On the Mac, deliberately kept out of git |
-| `DESIGN.md` | Written for version 2, including "considered and rejected" and "with another week" |
-| Submission | Not yet submitted through the application form |
-
-Before submitting:
-
-1. Rename the GitHub repository to `memo-chat`.
-2. Merge `multi-user` into `main` (or open a PR and merge it), so the public default branch shows the best version.
-3. Check that the README quick start (`docker compose up --build`) is the first thing a reviewer sees, that `npm install && npm run dev` still works as the rules require, and add the live URL to the README.
-4. Submit the repo link and the live URL through the form.
 
 Known limits today:
 
 - **Verify questions are slow:** about 16–30 s to first text in the eval on Gemini's free tier, against a target of under 12 s. Most of that is rate limits and model latency, not our code.
-- **The free Gemini key** is shared by every user of the live site. Busy periods return "high demand" errors, which the app now explains in plain words and asks the user to retry.
+- **The free Gemini key** is shared by every user of the live site. Busy periods return "high demand" errors, which the app explains in plain words and asks the user to retry.
 - **Recall depends on the planner:** when the Gemini planner call fails, memory is only searched if the question clearly points back to an earlier chat.
-- **Guests** lose their history if they clear cookies, and can't yet turn a guest account into a full account.
+- **Some date phrases aren't understood yet:** "last to last Tuesday" and "the Tuesday before last" are read as "last Tuesday", and broad ranges like "two weeks ago" can miss by more than a day.
 - **Accounts** have no password reset or email verification yet.
 - **Deploys** are manual from the Mac, and the site runs on trial credit.
-- The stress-test gaps that are still open: changed decisions aren't retired from the claims ledger, nothing can be deleted on request, only the last 10 turns are replayed, and broad ranges like "two weeks ago" can miss by more than a day.
+- The stress-test gaps that are still open: changed decisions aren't retired from the claims ledger, and only the last 10 turns are replayed. Users can now delete chats and edit messages (which removes later messages and everything derived from them), but there is no full account export or delete yet.
 
 ---
 
