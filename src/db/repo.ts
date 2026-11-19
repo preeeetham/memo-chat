@@ -41,6 +41,10 @@ export type ClaimRow = {
   published_at: string | null;
   source_url: string | null;
   evidence_id: string | null;
+  /** Set when a later turn stated a different value for the same subject and attribute. */
+  superseded_by?: string | null;
+  superseded_at?: string | null;
+  superseded_value?: string | null;
 };
 export type EvidenceRow = {
   id: string;
@@ -139,6 +143,8 @@ export async function deleteConversation(id: string): Promise<boolean> {
   return tx(async (run) => {
     const ids = (await run<{ id: string }>("SELECT id FROM messages WHERE conversation_id = $1 AND role = 'assistant'", [id])).map((r) => r.id);
     if (ids.length) {
+      // Claims these answers had retired become current again.
+      await run("UPDATE claims SET superseded_by = NULL, superseded_at = NULL WHERE superseded_by IN (SELECT id FROM claims WHERE assistant_message_id = ANY($1))", [ids]);
       await run("DELETE FROM claims WHERE assistant_message_id = ANY($1)", [ids]);
       await run("DELETE FROM turn_digests WHERE assistant_message_id = ANY($1)", [ids]);
       await run("DELETE FROM search_calls WHERE assistant_message_id = ANY($1)", [ids]); // cascades to web_evidence
@@ -163,6 +169,8 @@ export async function truncateFrom(conversationId: string, userMessageId: string
     const removed = await run<{ id: string; role: string }>("DELETE FROM messages WHERE conversation_id = $1 AND seq >= $2 RETURNING id, role", [conversationId, target.seq]);
     const ids = removed.filter((m) => m.role === "assistant").map((m) => m.id);
     if (ids.length) {
+      // Claims these answers had retired become current again.
+      await run("UPDATE claims SET superseded_by = NULL, superseded_at = NULL WHERE superseded_by IN (SELECT id FROM claims WHERE assistant_message_id = ANY($1))", [ids]);
       await run("DELETE FROM claims WHERE assistant_message_id = ANY($1)", [ids]);
       await run("DELETE FROM turn_digests WHERE assistant_message_id = ANY($1)", [ids]);
       await run("DELETE FROM search_calls WHERE assistant_message_id = ANY($1)", [ids]); // cascades to web_evidence
@@ -361,7 +369,23 @@ export async function getDigest(assistantId: string): Promise<{ question: string
 
 export async function claimsFor(assistantIds: string[]): Promise<ClaimRow[]> {
   if (!assistantIds.length) return [];
-  return q("SELECT * FROM claims WHERE assistant_message_id = ANY($1) ORDER BY created_at, seq", [assistantIds]);
+  return q(
+    `SELECT c.*, n.value AS superseded_value FROM claims c
+     LEFT JOIN claims n ON n.user_id = c.user_id AND n.id = c.superseded_by
+     WHERE c.assistant_message_id = ANY($1) ORDER BY c.created_at, c.seq`,
+    [assistantIds],
+  );
+}
+
+/** Current (not superseded) decisions and shortlists, so extraction can reuse their subject names. */
+export async function openDecisionSubjects(limit = 30): Promise<string[]> {
+  return (
+    await q<{ subject: string }>(
+      `SELECT subject FROM claims WHERE superseded_by IS NULL AND attribute IN ('decision', 'shortlist', 'choice')
+       GROUP BY subject ORDER BY max(created_at) DESC LIMIT $1`,
+      [limit],
+    )
+  ).map((r) => r.subject);
 }
 
 export type NewClaim = Omit<ClaimRow, "id">;
@@ -377,6 +401,7 @@ export async function saveExtraction(
     // FOR SHARE makes a concurrent edit wait for this save, so it removes these rows too.
     if (!(await run("SELECT 1 FROM messages WHERE id = $1 FOR SHARE", [turn.assistantId])).length) return;
     // Idempotent: a retried job replaces its own rows.
+    await run("UPDATE claims SET superseded_by = NULL, superseded_at = NULL WHERE superseded_by IN (SELECT id FROM claims WHERE assistant_message_id = $1)", [turn.assistantId]);
     await run("DELETE FROM claims WHERE assistant_message_id = $1", [turn.assistantId]);
     await run(
       `INSERT INTO turn_digests (assistant_message_id, conversation_id, local_date, created_at, question, answer_summary, entities, keywords, embedding)
@@ -396,10 +421,18 @@ export async function saveExtraction(
       ],
     );
     for (const c of claims) {
+      const id = newId("cl");
       await run(
         `INSERT INTO claims (id, assistant_message_id, local_date, speaker, subject, attribute, value, observed_at, published_at, source_url, evidence_id, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-        [newId("cl"), c.assistant_message_id, turn.localDate, c.speaker, c.subject, c.attribute, c.value, c.observed_at, c.published_at, c.source_url, c.evidence_id, turn.createdAt],
+        [id, c.assistant_message_id, turn.localDate, c.speaker, c.subject, c.attribute, c.value, c.observed_at, c.published_at, c.source_url, c.evidence_id, turn.createdAt],
+      );
+      // Retire older, still-current claims about the same thing that said something different.
+      await run(
+        `UPDATE claims SET superseded_by = $1, superseded_at = $2
+         WHERE superseded_by IS NULL AND assistant_message_id <> $3 AND created_at < $2
+           AND lower(subject) = lower($4) AND lower(attribute) = lower($5) AND lower(value) <> lower($6)`,
+        [id, turn.createdAt, turn.assistantId, c.subject, c.attribute, c.value],
       );
     }
   });

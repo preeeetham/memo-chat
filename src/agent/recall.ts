@@ -20,7 +20,16 @@ import { addDays } from "../time/local";
 import type { DateRange, Resolution } from "../time/resolve";
 import type { Plan } from "./planner";
 
-export type RecalledClaim = { subject: string; attribute: string; value: string; observed_at: string; source_url: string | null; evidence_excerpt?: string };
+export type RecalledClaim = {
+  subject: string;
+  attribute: string;
+  value: string;
+  observed_at: string;
+  source_url: string | null;
+  evidence_excerpt?: string;
+  /** A later chat changed this: the newer value and when. */
+  superseded?: { value: string; on: string };
+};
 export type RecalledTurn = {
   ref: string;
   assistant_id: string;
@@ -260,6 +269,7 @@ async function buildTurns(rows: TurnRow[]): Promise<RecalledTurn[]> {
         observed_at: c.observed_at.slice(0, 10),
         source_url: c.source_url,
         evidence_excerpt: c.evidence_id && evidence.has(c.evidence_id) ? clip(evidence.get(c.evidence_id)!.excerpt, EVIDENCE_CHARS) : undefined,
+        superseded: c.superseded_by ? { value: c.superseded_value ?? "(changed)", on: (c.superseded_at ?? "").slice(0, 10) } : undefined,
       })),
   }));
 }

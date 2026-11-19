@@ -3,7 +3,7 @@
  * "has it changed since?"). Claims link back to the exact web evidence the answer cited.
  */
 import { z } from "zod";
-import { evidenceFor, getMessage, saveExtraction, type NewClaim } from "../db/repo";
+import { evidenceFor, getMessage, openDecisionSubjects, saveExtraction, type NewClaim } from "../db/repo";
 import { structured } from "../llm/client";
 import { embed } from "../llm/embed";
 
@@ -28,7 +28,8 @@ Extract only what is actually stated. Claims are concrete, checkable facts or de
 - One claim per item per attribute (a 5-vendor comparison gives at least 5 claims).
 - Copy values exactly, with currency, unit and billing period.
 - source_ref is the [S#] citation next to that fact in the answer, else null.
-- Also extract decisions or lists the user states ("we shortlisted X, Y, Z", "we picked Neon") with speaker "user" and attribute "decision" or "shortlist".`;
+- Also extract decisions or lists the user states ("we shortlisted X, Y, Z", "we picked Neon") with speaker "user" and attribute "decision" or "shortlist".
+- For a decision, the subject is what was being decided ("Postgres hosting provider"), the value is the choice ("Neon"). If the user changes an earlier decision ("we went with Supabase instead"), reuse that decision's existing subject name exactly, so the old choice is retired.`;
 
 export async function extractTurn(assistantMessageId: string): Promise<"done" | "skipped"> {
   const a = await getMessage(assistantMessageId);
@@ -38,9 +39,11 @@ export async function extractTurn(assistantMessageId: string): Promise<"done" | 
   const evidence = await evidenceFor(a.id);
   const sources = evidence.map((e) => `[${e.ref}] ${e.title ?? ""} ${e.url} (published ${e.published_at ?? "n/a"})`).join("\n");
 
+  const open = await openDecisionSubjects().catch(() => [] as string[]);
+  const known = open.length ? `\n\nOpen decisions from earlier chats (reuse these subject names if this one changes them):\n${open.map((s) => `- ${s}`).join("\n")}` : "";
   const out = await structured(Extraction, "extraction", [
     { role: "system", content: SYSTEM },
-    { role: "user", content: `User (${u.local_date}):\n${u.text}\n\nAssistant answer:\n${a.text}\n\nSources the answer could cite:\n${sources || "(none)"}` },
+    { role: "user", content: `User (${u.local_date}):\n${u.text}\n\nAssistant answer:\n${a.text}\n\nSources the answer could cite:\n${sources || "(none)"}${known}` },
   ], { maxTokens: 4000, timeoutMs: 45_000 });
 
   const byRef = new Map(evidence.map((e) => [e.ref, e]));

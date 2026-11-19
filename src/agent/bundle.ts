@@ -34,7 +34,8 @@ export function renderContext(nowLine: string, b: EvidenceBundle): string {
     if (t.claims.length) {
       lines.push("Claims recorded from that answer:");
       for (const c of t.claims) {
-        lines.push(`- ${c.subject} | ${c.attribute} | ${c.value} | seen ${c.observed_at}${c.source_url ? ` | ${c.source_url}` : ""}`);
+        const later = c.superseded ? ` | SUPERSEDED: changed on ${c.superseded.on} to "${c.superseded.value}" (no longer current)` : "";
+        lines.push(`- ${c.subject} | ${c.attribute} | ${c.value} | seen ${c.observed_at}${c.source_url ? ` | ${c.source_url}` : ""}${later}`);
         if (c.evidence_excerpt) lines.push(`  page text then: "${c.evidence_excerpt.replace(/\s+/g, " ")}"`);
       }
     }
