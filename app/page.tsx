@@ -613,44 +613,8 @@ export default function Page() {
   return (
     <div className={`app${collapsed ? " collapsed" : ""}${resizing ? " resizing" : ""}${messages.length ? " thread-open" : ""}`} style={{ "--sidebar-w": `${sidebarW}px` } as React.CSSProperties}>
       <div className="sky" aria-hidden>
-        <span className="cloud c1" />
-        <span className="cloud c2" />
-        <span className="cloud c3" />
-        <span className="stars" />
-        {/* Procedural clouds: one fractal-noise field cut at three levels (shade, body, highlight), so
-            day and night share the same cloud shapes and only the colours change. */}
-        <svg className="cloud-noise" width="100%" height="100%" preserveAspectRatio="none">
-          <defs>
-            {[
-              ["day-shade", "0.70 0.79 0.94", "5 -2.1", 11],
-              ["day-body", "0.98 0.99 1", "6.5 -3.0", 11],
-              ["day-light", "1 1 1", "7 -3.55", 4],
-              ["night-shade", "0.09 0.06 0.20", "5 -2.1", 11],
-              ["night-body", "0.25 0.17 0.42", "6.5 -3.0", 11],
-              ["night-light", "0.66 0.54 0.88", "7 -3.55", 4],
-            ].map(([id, rgb, alpha, seed]) => {
-              const [r, g, b] = String(rgb).split(" ");
-              const [k, c] = String(alpha).split(" ");
-              return (
-                <filter key={id as string} id={`sky-${id}`} x="0" y="0" width="100%" height="100%">
-                  <feTurbulence type="fractalNoise" baseFrequency={seed === 4 ? "0.0045 0.012" : "0.0032 0.0085"} numOctaves={5} seed={seed as number} />
-                  <feColorMatrix type="matrix" values={`0 0 0 0 ${r}  0 0 0 0 ${g}  0 0 0 0 ${b}  ${k} 0 0 0 ${c}`} />
-                </filter>
-              );
-            })}
-          </defs>
-          <g className="day">
-            <rect width="100%" height="100%" filter="url(#sky-day-shade)" />
-            <rect width="100%" height="100%" filter="url(#sky-day-body)" />
-            <rect className="hl" width="100%" height="100%" filter="url(#sky-day-light)" />
-          </g>
-          <g className="night">
-            <rect width="100%" height="100%" filter="url(#sky-night-shade)" />
-            <rect width="100%" height="100%" filter="url(#sky-night-body)" />
-            <rect className="hl" width="100%" height="100%" filter="url(#sky-night-light)" />
-          </g>
-        </svg>
-        <span className="halftone" />
+        <div className="sky-photo" />
+        <div className="sky-tint" />
       </div>
       <aside className={`sidebar${sidebarOpen ? " open" : ""}`}>
         {!collapsed && (
