@@ -108,11 +108,15 @@ export default function Login() {
 
   return (
     <div className="login">
+      <div className="sky" aria-hidden>
+        <div className="sky-photo" />
+        <div className="sky-tint" />
+      </div>
       <nav className="login-nav">
         <span className="brand"><span className="brand-mark" aria-hidden />Memo Chat</span>
       </nav>
       <main className="login-main">
-        <section>
+        <section className="login-card">
           <h1>
             Answers that <span className="accent">remember</span> what you asked
           </h1>
