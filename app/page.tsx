@@ -599,7 +599,6 @@ export default function Page() {
     const r = await api("/api/models", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: id }) });
     if (!r.ok) setChatModel(prev);
   }
-  const activeTitle = activeId ? convs.find((c) => c.id === activeId)?.title ?? "New chat" : null;
 
   async function finishWelcome() {
     const name = nameInput.trim();
@@ -770,7 +769,6 @@ export default function Page() {
             Setup needed: {settings.problems.join(" ")} Copy <code>.env.example</code> to <code>.env</code>, fill it in, and restart (<code>docker compose up</code> or <code>npm run dev</code>).
           </div>
         )}
-        {activeTitle && <div className="chat-head" title={activeTitle}>{activeTitle}</div>}
         <div className="topbar">
           <button className="btn btn-line" onClick={() => setSidebarOpen((s) => !s)} aria-label="Show conversations">☰ Chats</button>
           <span className="brand"><span className="brand-mark" aria-hidden />Memo Chat</span>
