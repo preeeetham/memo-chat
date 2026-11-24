@@ -3,7 +3,15 @@
 export type SearchProviderName = "exa" | "tavily" | "mock";
 
 /** An OpenAI-compatible endpoint whose models the user can pick from. The first one is the primary (LLM_*). */
-export type LlmProvider = { id: string; label: string; baseURL: string; apiKey: string };
+export type LlmProvider = {
+  id: string;
+  label: string;
+  baseURL: string;
+  apiKey: string;
+  /** Client retries per call. NIM's free tier is rate-limited and some models are slow, so a retry
+   *  only multiplies the load (one timeout became four requests); NIM calls fail fast instead. */
+  maxRetries: number;
+};
 
 export type Config = {
   llm: {
@@ -61,7 +69,7 @@ export function config(): Config {
   const apiKey = env("LLM_API_KEY");
   const providers: [LlmProvider, ...LlmProvider[]] = [primaryProvider(baseURL, apiKey)];
   if (env("NIM_API_KEY") && providers[0].id !== "nim")
-    providers.push({ id: "nim", label: "NVIDIA NIM", baseURL: env("NIM_BASE_URL") || "https://integrate.api.nvidia.com/v1", apiKey: env("NIM_API_KEY") });
+    providers.push({ id: "nim", label: "NVIDIA NIM", baseURL: env("NIM_BASE_URL") || "https://integrate.api.nvidia.com/v1", apiKey: env("NIM_API_KEY"), maxRetries: 0 });
   return {
     llm: {
       provider: env("LLM_PROVIDER") || "openai",
@@ -112,7 +120,8 @@ function primaryProvider(baseURL: string, apiKey: string): LlmProvider {
     [/api\.openai\.com/, "openai", "OpenAI"],
   ];
   const hit = known.find(([re]) => re.test(baseURL));
-  return { id: hit?.[1] ?? "primary", label: hit?.[2] ?? "Default", baseURL, apiKey };
+  const id = hit?.[1] ?? "primary";
+  return { id, label: hit?.[2] ?? "Default", baseURL, apiKey, maxRetries: id === "nim" ? 0 : 3 };
 }
 
 /** Human-readable problems that stop the app from working. Shown in the UI instead of crashing. */

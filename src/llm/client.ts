@@ -11,12 +11,13 @@ import { config } from "../config";
 const g = globalThis as unknown as { __memochatLlm?: Map<string, OpenAI> };
 
 /** Client for the primary endpoint (LLM_BASE_URL), or for another endpoint when given one. */
-export function llm(endpoint?: { baseURL: string; apiKey: string }): OpenAI {
+export function llm(endpoint?: { baseURL: string; apiKey: string; maxRetries?: number }): OpenAI {
   const { baseURL, apiKey } = endpoint ?? config().llm;
-  const key = `${baseURL}|${apiKey}`;
+  const maxRetries = endpoint?.maxRetries ?? config().llm.providers[0].maxRetries;
+  const key = `${baseURL}|${apiKey}|${maxRetries}`;
   const clients = (g.__memochatLlm ??= new Map());
   let client = clients.get(key);
-  if (!client) clients.set(key, (client = new OpenAI({ apiKey, baseURL, maxRetries: 3, timeout: 60_000 })));
+  if (!client) clients.set(key, (client = new OpenAI({ apiKey, baseURL, maxRetries, timeout: 60_000 })));
   return client;
 }
 

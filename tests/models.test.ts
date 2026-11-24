@@ -25,6 +25,14 @@ describe("providers and stored choices", () => {
     expect(config().llm.providers.map((p) => p.id)).toEqual(["gemini", "nim"]);
   });
 
+  it("NIM calls don't retry; the primary endpoint keeps its retries", () => {
+    process.env.LLM_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai";
+    process.env.NIM_API_KEY = "test-nim-key";
+    expect(config().llm.providers.map((p) => [p.id, p.maxRetries])).toEqual([["gemini", 3], ["nim", 0]]);
+    process.env.LLM_BASE_URL = "https://integrate.api.nvidia.com/v1";
+    expect(config().llm.providers[0].maxRetries).toBe(0);
+  });
+
   it("doesn't list NIM twice when it is already the primary endpoint", () => {
     process.env.LLM_BASE_URL = "https://integrate.api.nvidia.com/v1";
     process.env.NIM_API_KEY = "test-nim-key";
