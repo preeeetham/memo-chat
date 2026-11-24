@@ -917,32 +917,24 @@ export default function Page() {
                 }
               }}
             />
-            <div className="box-bar">
-              <span className="bar-left" title="Memo Chat remembers your past chats and rechecks them on the web">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                  <path d="M12 3a6 6 0 0 0-6 6c0 2.2 1.2 3.6 2.4 4.8.8.8 1.1 1.5 1.1 2.7V18h5v-1.5c0-1.2.3-1.9 1.1-2.7C16.8 12.6 18 11.2 18 9a6 6 0 0 0-6-6Z" />
-                  <path d="M10 21h4" />
+            {busy ? (
+              <button type="button" className="send-btn stop" onClick={stopTurn} aria-label="Stop answering" title="Stop">
+                <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden><rect width="12" height="12" rx="2.5" fill="currentColor" /></svg>
+              </button>
+            ) : (
+              <button type="submit" className="send-btn" disabled={!input.trim()} aria-label="Send message" title="Send (Enter)">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M12 19V5" />
+                  <path d="m5 12 7-7 7 7" />
                 </svg>
-                memory on
-              </span>
-              <span className="bar-right">
-                {chatModel && <ModelMenu models={models} selected={chatModel.selected} defaultId={chatModel.default} disabled={busy} onPick={(id) => void pickModel(id)} />}
-                {busy ? (
-                  <button type="button" className="send-btn stop" onClick={stopTurn} aria-label="Stop answering" title="Stop">
-                    <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden><rect width="12" height="12" rx="2.5" fill="currentColor" /></svg>
-                  </button>
-                ) : (
-                  <button type="submit" className="send-btn" disabled={!input.trim()} aria-label="Send message" title="Send (Enter)">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                      <path d="M12 19V5" />
-                      <path d="m5 12 7-7 7 7" />
-                    </svg>
-                  </button>
-                )}
-              </span>
-            </div>
+              </button>
+            )}
           </form>
-          <div className="composer-note">Memo Chat can make mistakes. Answers cite their sources. Enter to send, Shift+Enter for a new line.</div>
+          {chatModel && (
+            <div className="composer-meta">
+              <ModelMenu models={models} selected={chatModel.selected} defaultId={chatModel.default} disabled={busy} onPick={(id) => void pickModel(id)} />
+            </div>
+          )}
         </div>
       </main>
     </div>

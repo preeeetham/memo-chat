@@ -77,12 +77,8 @@ export function ModelMenu(props: {
           setFilter("");
         }}
       >
-        <span className={`model-dot p-${current?.provider ?? "x"}`} aria-hidden />
         <span className="model-name">{label}</span>
         {current && <span className="model-provider">{current.providerLabel}</span>}
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-          <path d="m6 9 6 6 6-6" />
-        </svg>
       </button>
       {open && (
         <div className={`model-pop${place.up ? "" : " down"}`} style={{ maxHeight: place.max }} role="listbox" aria-label="Models">
