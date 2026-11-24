@@ -17,6 +17,7 @@ type Msg = {
   degraded?: string | null;
   error?: string;
 };
+type ModelOption = { id: string; provider: string; providerLabel: string; model: string };
 type Conv = { id: string; title: string | null; updated_at: string; last_local_date: string | null };
 type Settings = {
   problems: string[];
@@ -190,6 +191,8 @@ export default function Page() {
   const [status, setStatus] = useState<string | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [models, setModels] = useState<ModelOption[]>([]);
+  const [chatModel, setChatModel] = useState<{ selected: string; default: string } | null>(null);
   const [fakeNowInput, setFakeNowInput] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false); // desktop: sidebar hidden (remembered per browser)
@@ -236,6 +239,11 @@ export default function Page() {
       setWelcome(true);
       void api("/api/welcome", { method: "POST" });
     }
+  }, []);
+  const loadModels = useCallback(async () => {
+    const r = await api("/api/models").then((x) => x.json());
+    setModels(r.models ?? []);
+    if (r.selected) setChatModel({ selected: r.selected, default: r.default });
   }, []);
   const openConv = useCallback(async (id: string) => {
     setSidebarOpen(false);
@@ -314,8 +322,9 @@ export default function Page() {
   useEffect(() => {
     void loadConvs();
     void loadSettings();
+    void loadModels();
     setUserTz(tz());
-  }, [loadConvs, loadSettings]);
+  }, [loadConvs, loadSettings, loadModels]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -576,6 +585,25 @@ export default function Page() {
   const userName = settings ? settings.preferredName ?? settings.user.name ?? settings.user.id : "";
   const greetName = settings?.preferredName ?? null;
 
+  async function pickModel(id: string) {
+    const prev = chatModel;
+    setChatModel((m) => (m ? { ...m, selected: id } : m));
+    const r = await api("/api/models", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: id }) });
+    if (!r.ok) setChatModel(prev);
+  }
+  const modelName = (id: string) => id.slice(id.indexOf(":") + 1);
+  // The picker groups models by endpoint; the server default is listed even if its endpoint didn't answer.
+  const modelGroups = (() => {
+    const byProvider = new Map<string, { label: string; items: ModelOption[] }>();
+    for (const m of models) {
+      const g = byProvider.get(m.provider) ?? { label: m.providerLabel, items: [] };
+      g.items.push(m);
+      byProvider.set(m.provider, g);
+    }
+    return [...byProvider.values()];
+  })();
+  const pickerHasSelected = chatModel ? models.some((m) => m.id === chatModel.selected) : false;
+
   async function finishWelcome() {
     const name = nameInput.trim();
     setWelcome(false);
@@ -695,7 +723,7 @@ export default function Page() {
             </div>
           )}
           <div className="engine">
-            {settings ? `${settings.model} · search: ${settings.searchProvider}` : "…"}
+            {settings ? `${chatModel ? modelName(chatModel.selected) : settings.model} · search: ${settings.searchProvider}` : "…"}
             {settings?.demoTools && (
               <>
                 {" "}· <button className="link-btn" onClick={() => setShowSettings((s) => !s)}>{showSettings ? "hide demo tools" : "demo tools"}</button>
@@ -848,6 +876,24 @@ export default function Page() {
           )}
         </div>
         <div className="composer">
+          {chatModel && (
+            <div className="model-row">
+              <label htmlFor="model-picker">Model</label>
+              <select id="model-picker" value={chatModel.selected} disabled={busy} onChange={(e) => void pickModel(e.target.value)} title="The model that writes the answers">
+                {!pickerHasSelected && <option value={chatModel.selected}>{modelName(chatModel.selected)}</option>}
+                {modelGroups.map((g) => (
+                  <optgroup key={g.label} label={g.label}>
+                    {g.items.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.model}
+                        {m.id === chatModel.default ? " (default)" : ""}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
+          )}
           <form
             onSubmit={(e) => {
               e.preventDefault();

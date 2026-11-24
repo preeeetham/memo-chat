@@ -2,8 +2,20 @@
 
 export type SearchProviderName = "exa" | "tavily" | "mock";
 
+/** An OpenAI-compatible endpoint whose models the user can pick from. The first one is the primary (LLM_*). */
+export type LlmProvider = { id: string; label: string; baseURL: string; apiKey: string };
+
 export type Config = {
-  llm: { provider: string; model: string; helperModel: string; fallbackModel: string; baseURL: string; apiKey: string };
+  llm: {
+    provider: string;
+    model: string;
+    helperModel: string;
+    fallbackModel: string;
+    baseURL: string;
+    apiKey: string;
+    /** Endpoints offered in the model picker: the primary, then NVIDIA NIM when NIM_API_KEY is set. */
+    providers: [LlmProvider, ...LlmProvider[]];
+  };
   embeddings: { model: string; dim: number; minSimilarity: number };
   search: { provider: SearchProviderName; fallback: SearchProviderName | null; exaKey: string; tavilyKey: string };
   databaseUrl: string;
@@ -45,14 +57,20 @@ export const DEV_SECRET = "dev-only-insecure-secret-change-me";
 
 export function config(): Config {
   const model = env("LLM_MODEL") || "gemini-3.5-flash-lite";
+  const baseURL = env("LLM_BASE_URL") || "https://generativelanguage.googleapis.com/v1beta/openai";
+  const apiKey = env("LLM_API_KEY");
+  const providers: [LlmProvider, ...LlmProvider[]] = [primaryProvider(baseURL, apiKey)];
+  if (env("NIM_API_KEY") && providers[0].id !== "nim")
+    providers.push({ id: "nim", label: "NVIDIA NIM", baseURL: env("NIM_BASE_URL") || "https://integrate.api.nvidia.com/v1", apiKey: env("NIM_API_KEY") });
   return {
     llm: {
       provider: env("LLM_PROVIDER") || "openai",
       model,
       helperModel: env("HELPER_MODEL") || model,
       fallbackModel: env("LLM_FALLBACK_MODEL"),
-      baseURL: env("LLM_BASE_URL") || "https://generativelanguage.googleapis.com/v1beta/openai",
-      apiKey: env("LLM_API_KEY"),
+      baseURL,
+      apiKey,
+      providers,
     },
     embeddings: { model: env("EMBEDDING_MODEL"), dim: 768, minSimilarity: num("EMBEDDING_MIN_SIMILARITY", 0.6) },
     search: {
@@ -84,6 +102,17 @@ export function config(): Config {
       historyTurns: 10,
     },
   };
+}
+
+/** Name the primary endpoint after its host, so the picker can say "Gemini" or "NVIDIA NIM". */
+function primaryProvider(baseURL: string, apiKey: string): LlmProvider {
+  const known: Array<[RegExp, string, string]> = [
+    [/generativelanguage\.googleapis\.com/, "gemini", "Gemini"],
+    [/integrate\.api\.nvidia\.com/, "nim", "NVIDIA NIM"],
+    [/api\.openai\.com/, "openai", "OpenAI"],
+  ];
+  const hit = known.find(([re]) => re.test(baseURL));
+  return { id: hit?.[1] ?? "primary", label: hit?.[2] ?? "Default", baseURL, apiKey };
 }
 
 /** Human-readable problems that stop the app from working. Shown in the UI instead of crashing. */

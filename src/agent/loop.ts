@@ -7,6 +7,7 @@ import type { ChatCompletionMessageParam, ChatCompletionMessageToolCall, Reasoni
 import { recordTokens } from "../budget";
 import { config } from "../config";
 import { isFallbackError, llm } from "../llm/client";
+import { defaultChatModel, type ChatModel } from "../llm/models";
 import { WebSearchInput, webSearchTool, type SearchSession } from "../search/tool";
 import type { ChatEvent } from "../sse";
 import { ANSWER_NOW } from "./prompt";
@@ -33,6 +34,8 @@ export async function runLoop(opts: {
   emit: (e: ChatEvent) => void;
   signal?: AbortSignal;
   allowTools?: boolean;
+  /** The model to answer with (the user's pick); defaults to LLM_MODEL on the primary endpoint. */
+  model?: ChatModel;
 }): Promise<LoopResult> {
   const { maxToolRounds } = config().limits;
   const started = Date.now();
@@ -43,7 +46,11 @@ export async function runLoop(opts: {
   let searches = 0;
   let finishReason: string | null = null;
   let round = 0;
-  let model = config().llm.model;
+  const chosen = opts.model ?? defaultChatModel();
+  let model = chosen.model;
+  let endpoint = chosen.provider;
+  // Not every endpoint takes reasoning_effort; drop it after the first 400 and keep it off for the turn.
+  let sendEffort = true;
   let fallbackModel: string | null = null;
   let tokens = 0;
 
@@ -59,13 +66,13 @@ export async function runLoop(opts: {
     }
 
     const open = (m: string) =>
-      llm().chat.completions.create(
+      llm(endpoint).chat.completions.create(
         {
           model: m,
           messages: convo,
           stream: true,
           stream_options: { include_usage: true },
-          reasoning_effort: opts.effort,
+          ...(sendEffort ? { reasoning_effort: opts.effort } : {}),
           // Gemini counts its thinking tokens here too, so leave room for long answers after a search.
           max_completion_tokens: 16000,
           ...(toolsAllowed ? { tools: [webSearchTool], tool_choice: "auto" as const } : {}),
@@ -74,13 +81,19 @@ export async function runLoop(opts: {
       );
     let stream: Awaited<ReturnType<typeof open>>;
     try {
-      stream = await open(model);
+      stream = await open(model).catch((err) => {
+        if ((err as { status?: number }).status !== 400 || !sendEffort || opts.signal?.aborted) throw err;
+        sendEffort = false;
+        return open(model);
+      });
     } catch (err) {
       // Primary model rate-limited, overloaded or down: answer with the fallback model, flagged as degraded.
       const fb = config().llm.fallbackModel;
       if (!fb || fb === model || !isFallbackError(err) || opts.signal?.aborted) throw err;
       console.warn(`[loop] ${model} failed (${(err as { status?: number }).status}); falling back to ${fb}`);
       model = fallbackModel = fb;
+      endpoint = config().llm.providers[0];
+      sendEffort = true;
       opts.emit({ type: "status", text: `Main model unavailable; answering with ${fb} (degraded)…` });
       stream = await open(model);
     }

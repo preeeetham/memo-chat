@@ -2,7 +2,7 @@
 import type { ChatCompletionMessageParam, ReasoningEffort } from "openai/resources";
 import { now } from "../clock";
 import { config } from "../config";
-import { createConversation, digestsFor, forgetTurns, turnIdsInConversations, getConversation, getMessages, insertMessage, setConversationTitle, type MessageRow } from "../db/repo";
+import { createConversation, digestsFor, getChatModel, forgetTurns, turnIdsInConversations, getConversation, getMessages, insertMessage, setConversationTitle, type MessageRow } from "../db/repo";
 import { newId } from "../ids";
 import { publishJob } from "../memory/jobs";
 import { SearchSession } from "../search/tool";
@@ -13,6 +13,7 @@ import { guessedResolutions, resolveAll, unresolvedExpressions, type Resolution 
 import { renderContext } from "./bundle";
 import { runLoop } from "./loop";
 import { embed } from "../llm/embed";
+import { parseChatModel } from "../llm/models";
 import { isFastPath, plan as makePlan, type Plan } from "./planner";
 import { SYSTEM_PROMPT } from "./prompt";
 import { recall } from "./recall";
@@ -118,6 +119,7 @@ export async function runTurn(input: TurnInput, emit: (e: ChatEvent) => void, si
   const search = new SearchSession(assistantId, tz);
   const result = await runLoop({
     messages: [{ role: "system", content: SYSTEM_PROMPT }, ...history, userMsg, contextNote],
+    model: parseChatModel(await getChatModel().catch(() => null)) ?? undefined,
     effort,
     search,
     emit,

@@ -258,6 +258,9 @@ a.cite.mem { color: var(--blue-ink); }
 .send-btn:hover:not(:disabled) { opacity: .85; }
 .send-btn:disabled { opacity: .25; cursor: default; }
 .send-btn:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+.composer .model-row { max-width: 760px; margin: 0 auto 8px; display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
+.composer .model-row select { max-width: min(100%, 360px); min-width: 0; padding: 5px 8px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--raised); color: var(--text); font: inherit; font-size: 12.5px; cursor: pointer; }
+.composer .model-row select:disabled { opacity: .6; cursor: default; }
 .composer .hint { max-width: 760px; margin: 8px auto 0; font-size: 12px; color: var(--muted); text-align: center; }
 
 /* Sign-in */

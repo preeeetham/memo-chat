@@ -140,6 +140,19 @@ async function ask(question: string): Promise<Run> {
 console.log(`Seeding demo history (now = ${process.env.MEMOCHAT_FAKE_NOW}, tz = ${TZ})…`);
 await ensureUser({ id: EVAL_USER, name: "eval" }, "dev", "eval");
 await asUser(EVAL_USER, () => seedDemo(TZ));
+// EVAL_CHAT_MODEL="nim:<model>" answers with a model from the picker, as a user who chose it would;
+// planning, memory extraction and the judge stay on LLM_MODEL so only the answering model differs.
+const chatModel = process.env.EVAL_CHAT_MODEL || null;
+if (chatModel) {
+  const { setChatModel } = await import("../src/db/repo");
+  const { parseChatModel } = await import("../src/llm/models");
+  if (!parseChatModel(chatModel)) {
+    console.error(`EVAL_CHAT_MODEL=${chatModel}: unknown provider (is its API key set?)`);
+    await cleanup();
+    process.exit(1);
+  }
+  await asUser(EVAL_USER, () => setChatModel(chatModel));
+}
 await drainAll(300_000);
 
 const rows: string[] = [];
@@ -184,7 +197,7 @@ for (const [i, s] of scenarios.entries()) {
 
 const report = `# Eval results
 
-Clock frozen at ${process.env.MEMOCHAT_FAKE_NOW} (${TZ}). Model: ${process.env.LLM_MODEL}. Search: ${process.env.SEARCH_PROVIDER || "exa"}. Run at ${new Date().toISOString()}.
+Clock frozen at ${process.env.MEMOCHAT_FAKE_NOW} (${TZ}). Model: ${chatModel ?? process.env.LLM_MODEL}${chatModel ? ` (helper and judge: ${process.env.LLM_MODEL})` : ""}. Search: ${process.env.SEARCH_PROVIDER || "exa"}. Run at ${new Date().toISOString()}.
 
 **${passed}/${total} checks passed.**
 

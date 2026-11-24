@@ -84,6 +84,15 @@ export async function setPreferredName(name: string | null): Promise<void> {
   await q("UPDATE users SET preferred_name = $1", [name]);
 }
 
+/** The chat model this user picked ("<provider>:<model>"), or null for the server default. */
+export async function getChatModel(): Promise<string | null> {
+  return (await q<{ chat_model: string | null }>("SELECT chat_model FROM users"))[0]?.chat_model ?? null;
+}
+
+export async function setChatModel(ref: string | null): Promise<void> {
+  await q("UPDATE users SET chat_model = $1", [ref]);
+}
+
 /** Has this user already seen the first-visit welcome? */
 export async function isWelcomed(): Promise<boolean> {
   return Boolean((await q<{ welcomed_at: string | null }>("SELECT welcomed_at FROM users"))[0]?.welcomed_at);

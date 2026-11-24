@@ -8,15 +8,16 @@ import { z } from "zod";
 import { recordTokens } from "../budget";
 import { config } from "../config";
 
-const g = globalThis as unknown as { __memochatLlm?: { key: string; client: OpenAI } };
+const g = globalThis as unknown as { __memochatLlm?: Map<string, OpenAI> };
 
-export function llm(): OpenAI {
-  const c = config().llm;
-  const key = `${c.baseURL}|${c.apiKey}`;
-  if (g.__memochatLlm?.key !== key) {
-    g.__memochatLlm = { key, client: new OpenAI({ apiKey: c.apiKey, baseURL: c.baseURL, maxRetries: 3, timeout: 60_000 }) };
-  }
-  return g.__memochatLlm.client;
+/** Client for the primary endpoint (LLM_BASE_URL), or for another endpoint when given one. */
+export function llm(endpoint?: { baseURL: string; apiKey: string }): OpenAI {
+  const { baseURL, apiKey } = endpoint ?? config().llm;
+  const key = `${baseURL}|${apiKey}`;
+  const clients = (g.__memochatLlm ??= new Map());
+  let client = clients.get(key);
+  if (!client) clients.set(key, (client = new OpenAI({ apiKey, baseURL, maxRetries: 3, timeout: 60_000 })));
+  return client;
 }
 
 /** JSON Schema for response_format, from a zod schema. */

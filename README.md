@@ -153,6 +153,7 @@ All settings live in `.env` (see [.env.example](.env.example) for every key, wit
 | `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` | Gemini `gemini-3.5-flash-lite` | Any OpenAI-compatible endpoint |
 | `HELPER_MODEL` | same as `LLM_MODEL` | Cheaper model for planning and memory extraction |
 | `LLM_FALLBACK_MODEL` | none | Used when the main model is rate-limited or down; the answer is marked as degraded |
+| `NIM_API_KEY` | none | Also lists NVIDIA NIM models in the model picker under the message box. Each user's pick answers their chats; planning and memory extraction stay on `HELPER_MODEL` |
 | `EMBEDDING_MODEL` | `gemini-embedding-001` | Hybrid recall (full text + vectors). Empty = full text only |
 | `SEARCH_PROVIDER`, `SEARCH_FALLBACK_PROVIDER` | `exa`, none | `exa` or `tavily` |
 
