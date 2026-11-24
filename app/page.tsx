@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { ModelMenu, type ModelOption } from "./ModelMenu";
 
 type Source = { ref: string; url: string; title: string; publishedAt: string | null; retrievedAt: string };
 type Recalled = { ref: string; local_date: string; conversation_id: string; conversation_title: string | null };
@@ -17,7 +18,6 @@ type Msg = {
   degraded?: string | null;
   error?: string;
 };
-type ModelOption = { id: string; provider: string; providerLabel: string; model: string };
 type Conv = { id: string; title: string | null; updated_at: string; last_local_date: string | null };
 type Settings = {
   problems: string[];
@@ -169,6 +169,14 @@ function SearchIcon() {
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
       <circle cx="11" cy="11" r="7" />
       <path d="m20 20-3.5-3.5" />
+    </svg>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M12 5v14M5 12h14" />
     </svg>
   );
 }
@@ -591,18 +599,7 @@ export default function Page() {
     const r = await api("/api/models", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: id }) });
     if (!r.ok) setChatModel(prev);
   }
-  const modelName = (id: string) => id.slice(id.indexOf(":") + 1);
-  // The picker groups models by endpoint; the server default is listed even if its endpoint didn't answer.
-  const modelGroups = (() => {
-    const byProvider = new Map<string, { label: string; items: ModelOption[] }>();
-    for (const m of models) {
-      const g = byProvider.get(m.provider) ?? { label: m.providerLabel, items: [] };
-      g.items.push(m);
-      byProvider.set(m.provider, g);
-    }
-    return [...byProvider.values()];
-  })();
-  const pickerHasSelected = chatModel ? models.some((m) => m.id === chatModel.selected) : false;
+  const activeTitle = activeId ? convs.find((c) => c.id === activeId)?.title ?? "New chat" : null;
 
   async function finishWelcome() {
     const name = nameInput.trim();
@@ -614,7 +611,26 @@ export default function Page() {
   }
 
   return (
-    <div className={`app${collapsed ? " collapsed" : ""}${resizing ? " resizing" : ""}`} style={{ "--sidebar-w": `${sidebarW}px` } as React.CSSProperties}>
+    <div className={`app${collapsed ? " collapsed" : ""}${resizing ? " resizing" : ""}${messages.length ? " thread-open" : ""}`} style={{ "--sidebar-w": `${sidebarW}px` } as React.CSSProperties}>
+      <div className="sky" aria-hidden>
+        <span className="cloud c1" />
+        <span className="cloud c2" />
+        <span className="cloud c3" />
+        {/* Procedural clouds: fractal noise thresholded into cloud masses, a pink body and a pale highlight layer. */}
+        <svg className="cloud-noise" width="100%" height="100%" preserveAspectRatio="none">
+          <filter id="sky-cloud-body" x="0" y="0" width="100%" height="100%">
+            <feTurbulence type="fractalNoise" baseFrequency="0.0032 0.0085" numOctaves="5" seed="11" />
+            <feColorMatrix type="matrix" values="0 0 0 0 1   0 0 0 0 0.6   0 0 0 0 0.76   6.5 0 0 0 -2.95" />
+          </filter>
+          <filter id="sky-cloud-light" x="0" y="0" width="100%" height="100%">
+            <feTurbulence type="fractalNoise" baseFrequency="0.0045 0.012" numOctaves="5" seed="4" />
+            <feColorMatrix type="matrix" values="0 0 0 0 1   0 0 0 0 0.9   0 0 0 0 0.82   7 0 0 0 -3.6" />
+          </filter>
+          <rect className="cloud-body" width="100%" height="100%" filter="url(#sky-cloud-body)" />
+          <rect className="cloud-light" width="100%" height="100%" filter="url(#sky-cloud-light)" />
+        </svg>
+        <span className="halftone" />
+      </div>
       <aside className={`sidebar${sidebarOpen ? " open" : ""}`}>
         {!collapsed && (
           <div
@@ -635,14 +651,21 @@ export default function Page() {
         <header>
           <span className="brand"><span className="brand-mark" aria-hidden />Memo Chat</span>
           <span className="sidebar-actions">
-            <button className={`icon-btn${searching ? " on" : ""}`} onClick={() => (searching ? closeSearch() : setSearching(true))} aria-label="Search chats" title="Search chats">
-              <SearchIcon />
-            </button>
             <button className="icon-btn collapse-btn" onClick={toggleSidebar} aria-label="Hide chats" title="Hide chats">
               <PanelIcon />
             </button>
           </span>
         </header>
+        <div className="side-nav">
+          <button className="side-row" onClick={() => (closeSearch(), newChat())}>
+            <PlusIcon />
+            <span>New chat</span>
+          </button>
+          <button className={`side-row${searching ? " on" : ""}`} onClick={() => (searching ? closeSearch() : setSearching(true))}>
+            <SearchIcon />
+            <span>Search</span>
+          </button>
+        </div>
         {searching && (
           <div className="sidebar-search">
             <input
@@ -655,10 +678,6 @@ export default function Page() {
             />
           </div>
         )}
-        <button className="new-chat-row" onClick={() => (closeSearch(), newChat())}>
-          <PencilIcon />
-          <span>New chat</span>
-        </button>
         <nav className="conv-list">
           {results !== null ? (
             <div>
@@ -723,7 +742,7 @@ export default function Page() {
             </div>
           )}
           <div className="engine">
-            {settings ? `${chatModel ? modelName(chatModel.selected) : settings.model} · search: ${settings.searchProvider}` : "…"}
+            {settings ? `Web search: ${settings.searchProvider}` : "…"}
             {settings?.demoTools && (
               <>
                 {" "}· <button className="link-btn" onClick={() => setShowSettings((s) => !s)}>{showSettings ? "hide demo tools" : "demo tools"}</button>
@@ -750,7 +769,7 @@ export default function Page() {
         </footer>
       </aside>
 
-      <main className="main">
+      <main className={`main${messages.length === 0 && !welcome ? " is-empty" : ""}`}>
         {collapsed && (
           <div className="collapsed-actions">
             <button className="icon-btn" onClick={toggleSidebar} aria-label="Show chats" title="Show chats">
@@ -766,6 +785,7 @@ export default function Page() {
             Setup needed: {settings.problems.join(" ")} Copy <code>.env.example</code> to <code>.env</code>, fill it in, and restart (<code>docker compose up</code> or <code>npm run dev</code>).
           </div>
         )}
+        {activeTitle && <div className="chat-head" title={activeTitle}>{activeTitle}</div>}
         <div className="topbar">
           <button className="btn btn-line" onClick={() => setSidebarOpen((s) => !s)} aria-label="Show conversations">☰ Chats</button>
           <span className="brand"><span className="brand-mark" aria-hidden />Memo Chat</span>
@@ -876,25 +896,26 @@ export default function Page() {
           )}
         </div>
         <div className="composer">
-          {chatModel && (
-            <div className="model-row">
-              <label htmlFor="model-picker">Model</label>
-              <select id="model-picker" value={chatModel.selected} disabled={busy} onChange={(e) => void pickModel(e.target.value)} title="The model that writes the answers">
-                {!pickerHasSelected && <option value={chatModel.selected}>{modelName(chatModel.selected)}</option>}
-                {modelGroups.map((g) => (
-                  <optgroup key={g.label} label={g.label}>
-                    {g.items.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.model}
-                        {m.id === chatModel.default ? " (default)" : ""}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
+          {settings && (
+            <div className="composer-chips">
+              <span className="chip" title="Where answers are rechecked">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
+                </svg>
+                web · {settings.searchProvider}
+              </span>
+              <span className="chip" title="Dates like “last Tuesday” are read in this timezone">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="M12 7v5l3 2" />
+                </svg>
+                {userTz}
+              </span>
             </div>
           )}
           <form
+            className="composer-box"
             onSubmit={(e) => {
               e.preventDefault();
               void send(input);
@@ -903,7 +924,7 @@ export default function Page() {
             <textarea
               value={input}
               rows={1}
-              placeholder="Ask anything…"
+              placeholder={messages.length ? "Reply…" : "Ask anything, or about anything you asked before…"}
               aria-label="Message"
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
@@ -913,20 +934,32 @@ export default function Page() {
                 }
               }}
             />
-            {busy ? (
-              <button type="button" className="send-btn stop" onClick={stopTurn} aria-label="Stop answering" title="Stop">
-                <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden><rect width="12" height="12" rx="2" fill="currentColor" /></svg>
-              </button>
-            ) : (
-              <button type="submit" className="send-btn" disabled={!input.trim()} aria-label="Send message" title="Send (Enter)">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                  <path d="M12 19V5" />
-                  <path d="m5 12 7-7 7 7" />
+            <div className="box-bar">
+              <span className="bar-left" title="Memo Chat remembers your past chats and rechecks them on the web">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M12 3a6 6 0 0 0-6 6c0 2.2 1.2 3.6 2.4 4.8.8.8 1.1 1.5 1.1 2.7V18h5v-1.5c0-1.2.3-1.9 1.1-2.7C16.8 12.6 18 11.2 18 9a6 6 0 0 0-6-6Z" />
+                  <path d="M10 21h4" />
                 </svg>
-              </button>
-            )}
+                memory on
+              </span>
+              <span className="bar-right">
+                {chatModel && <ModelMenu models={models} selected={chatModel.selected} defaultId={chatModel.default} disabled={busy} onPick={(id) => void pickModel(id)} />}
+                {busy ? (
+                  <button type="button" className="send-btn stop" onClick={stopTurn} aria-label="Stop answering" title="Stop">
+                    <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden><rect width="12" height="12" rx="2.5" fill="currentColor" /></svg>
+                  </button>
+                ) : (
+                  <button type="submit" className="send-btn" disabled={!input.trim()} aria-label="Send message" title="Send (Enter)">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                      <path d="M12 19V5" />
+                      <path d="m5 12 7-7 7 7" />
+                    </svg>
+                  </button>
+                )}
+              </span>
+            </div>
           </form>
-          <div className="hint">Dates are read in your timezone ({userTz}). Enter to send, Shift+Enter for a new line.</div>
+          <div className="composer-note">Memo Chat can make mistakes. Answers cite their sources. Enter to send, Shift+Enter for a new line.</div>
         </div>
       </main>
     </div>
